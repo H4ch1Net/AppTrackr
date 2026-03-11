@@ -5,7 +5,7 @@ import os
 import sys
 
 block_cipher = None
-ROOT = os.path.abspath(os.path.join(os.path.dirname(SPECPATH), '..'))
+ROOT = os.path.abspath(os.getcwd())
 
 a = Analysis(
     [os.path.join(ROOT, 'apptrackr', '__main__.py')],
