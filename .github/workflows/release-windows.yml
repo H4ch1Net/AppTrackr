@@ -52,7 +52,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            Output/AppTrackr_Setup.exe
+            packaging/Output/AppTrackr_Setup.exe
             dist/AppTrackr_Portable.zip
             README.md
           generate_release_notes: true
