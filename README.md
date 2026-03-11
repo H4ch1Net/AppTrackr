@@ -1,78 +1,128 @@
 # AppTrackr
 
-Desktop app usage time tracker with neon UI and gamification.
+Track where your time actually goes on Windows, one focused window at a time.
 
-## Features
-- Foreground window time tracking (Steam playtime style, for any app)
-- Daily/weekly analytics, calendar heatmap
-- Rewards & Neon Village mini-game
-- System tray integration, autostart
-- Sleek neon-themed UI (PySide6)
+AppTrackr is a Windows-first desktop application for foreground app usage tracking, analytics, update delivery, and an optional gamified rewards loop.
 
-## Quick Start
+## ✨ Highlights
+
+- Accurate foreground-only tracking (no inflated background time)
+- Clean daily and weekly usage analytics
+- Calendar-style activity view
+- Optional rewards and mini-game systems
+- Tray support, autostart, and in-app update checks
+- Neon UI with theme presets
+
+## Core Features
+
+- 🕒 **Foreground Tracking**: Time is counted only while an app is focused.
+- 📊 **Analytics**: View top apps, rollups, and trends.
+- 📅 **Calendar View**: Scan your usage patterns by day.
+- 🎮 **Rewards (Optional)**: Enable or disable per-app reward progression.
+- 🔄 **Updates**: Manual and automatic release checks from GitHub.
+- 🎨 **Themes**: Switch accent color presets from Settings.
+
+## 🖼️ Screenshots
+
+Replace these placeholders with your real screenshots.
+
+## Dashboard
+<img width="1073" height="737" alt="{431FD81B-B68E-4BCB-96A6-52BDF4A4AC81}" src="https://github.com/user-attachments/assets/9321c718-12b5-4900-bf14-4b7efd1281f4" />
+
+
+
+## Calendar
+<img width="1078" height="744" alt="{1FCC47E2-6700-4421-8C2A-F0F119DAADD3}" src="https://github.com/user-attachments/assets/0051ab63-14c9-418e-af19-bc1e50230072" />
+
+
+
+## Apps
+<img width="1075" height="745" alt="{4CC7C304-8189-4984-9CAA-E07EFE9FE8F8}" src="https://github.com/user-attachments/assets/9d83194e-1dd1-46e7-b8ed-f5e85ed9d9d1" />
+
+## Requirements
+
+- Windows 10/11
+- Python 3.10+
+
+## Developer Setup
+
+Clone the repository and install dependencies:
 
 ```bash
 pip install -e ".[dev]"
+```
+
+Run the app in development mode:
+
+```bash
 python -m apptrackr
 ```
 
-## Install For Users
+## 📦 Release Artifacts
 
-### Option A (Recommended): One-Click Installer
+Each release publishes two user install options:
 
-1. Go to the latest GitHub release under the `H4ch1Net` account.
-2. Download `AppTrackr_Setup.exe`.
-3. Run it and click through the installer.
-4. Launch `AppTrackr` from Start Menu or desktop shortcut.
+- `AppTrackr_Setup.exe` for a standard Windows installation
+- `AppTrackr_Portable.zip` for no-install portable usage
 
-This is the easiest and most normal Windows install flow.
+## End-User Installation
 
-### Option B (No Install): Portable Build
+Two distribution options are provided from Releases.
 
-1. Download `AppTrackr_Portable.zip` from the same release page.
-2. Extract the zip anywhere (for example `C:\Apps\AppTrackr`).
-3. Run `AppTrackr.exe` from the extracted folder.
+### Recommended: Standard Installer
 
-This is optional for users who do not want a normal installed app.
+1. Download `AppTrackr_Setup.exe`.
+2. Run the installer.
+3. Launch AppTrackr from Start Menu or desktop shortcut.
 
-## Launching
+### Optional: Portable Build
 
-- Installed build: Start Menu -> `AppTrackr`
-- Developer run: `python -m apptrackr`
+1. Download `AppTrackr_Portable.zip`.
+2. Extract it to any folder.
+3. Run `AppTrackr.exe` directly.
 
-## Updating
+## Updates
 
-- Manual update: run the latest `AppTrackr_Setup.exe` over the current installation.
-- In-app update checks:
-	- Go to `Settings -> Updates`
-	- Set `Update feed URL` to your latest-release API endpoint
-	- Click `Check for Updates`
-	- Enable `Automatically check for updates on startup`
+AppTrackr supports manual and automatic update checks.
 
-Example feed URL (replace repo name as needed):
+In `Settings -> Updates`:
 
-`https://api.github.com/repos/H4ch1Net/<repo>/releases/latest`
+1. Set `Update feed URL` to the repository releases API endpoint.
+2. Click `Check for Updates` for on-demand checks.
+3. Enable `Automatically check for updates on startup` if desired.
 
-## Publish Releases (Maintainer)
+For this repo, use:
 
-The repo includes a GitHub Actions workflow at `.github/workflows/release-windows.yml`.
+`https://api.github.com/repos/H4ch1Net/AppTrackr/releases/latest`
 
-- It builds both:
-	- `AppTrackr_Setup.exe` (normal installer)
-	- `AppTrackr_Portable.zip` (portable/no-install)
-- It uploads both files to the GitHub Release.
+Generic format (for forks/custom repos):
 
-Trigger it by pushing a version tag:
+`https://api.github.com/repos/<owner>/<repo>/releases/latest`
 
-```bash
-git tag v1.0.0
-git push origin v1.0.0
-```
+## Packaging (Windows)
 
-## Packaging
+Build the app bundle with PyInstaller:
 
 ```bash
 pyinstaller packaging/apptrackr.spec
 ```
 
-Then open `packaging/installer.iss` with Inno Setup and build `AppTrackr_Setup.exe`.
+Build the installer with Inno Setup:
+
+1. Open `packaging/installer.iss`.
+2. Compile the script.
+3. Output: `AppTrackr_Setup.exe`.
+
+## Release Automation
+
+The workflow at `.github/workflows/release-windows.yml` builds and publishes:
+
+- `AppTrackr_Setup.exe`
+- `AppTrackr_Portable.zip`
+
+Trigger a release by pushing a version tag:
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
