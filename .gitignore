@@ -1,0 +1,35 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+
+# Virtual envs
+.venv/
+venv/
+.env/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+*.spec
+!packaging/apptrackr.spec
+
+# Installer outputs
+Output/
+*.exe
+
+# Logs and local DB
+*.log
+*.sqlite
+*.db
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
