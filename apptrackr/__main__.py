@@ -2,6 +2,7 @@
 
 import sys
 import logging
+import ctypes
 
 from PySide6.QtWidgets import QApplication
 
@@ -9,7 +10,7 @@ from apptrackr.data import db
 from apptrackr.core.tracker import Tracker
 from apptrackr.core.process_watch import ProcessWatcher
 from apptrackr.core.events import ClickCounter
-from apptrackr.ui.main import MainWindow
+from apptrackr.ui.main import MainWindow, _make_icon
 from apptrackr.ui import theme
 
 logging.basicConfig(
@@ -20,6 +21,13 @@ log = logging.getLogger("apptrackr")
 
 
 def main():
+    # Ensure Windows taskbar groups this process as AppTrackr instead of python.exe.
+    if sys.platform.startswith("win"):
+        try:
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("H4ch1Net.AppTrackr")
+        except Exception:
+            pass
+
     # Init database
     db.init_db()
 
@@ -36,6 +44,7 @@ def main():
     # UI
     app = QApplication(sys.argv)
     app.setApplicationName("AppTrackr")
+    app.setWindowIcon(_make_icon())
     
     # Load saved theme before applying stylesheet
     saved_theme = db.get_setting("ui_theme", "Cyan")
