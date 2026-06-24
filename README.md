@@ -1,128 +1,108 @@
 # AppTrackr
 
-Track where your time actually goes on Windows, one focused window at a time.
+A Windows desktop app that tracks which applications you actually use, and for how long. Time is counted only while an app has focus, so the numbers reflect reality rather than just "was it open."
 
-AppTrackr is a Windows-first desktop application for foreground app usage tracking, analytics, update delivery, and an optional gamified rewards loop.
+## Screenshots
 
-## ✨ Highlights
+### Dashboard
+<img width="1073" height="737" alt="Dashboard" src="https://github.com/user-attachments/assets/9321c718-12b5-4900-bf14-4b7efd1281f4" />
 
-- Accurate foreground-only tracking (no inflated background time)
-- Clean daily and weekly usage analytics
-- Calendar-style activity view
-- Optional rewards and mini-game systems
-- Tray support, autostart, and in-app update checks
-- Neon UI with theme presets
+### Calendar
+<img width="1078" height="744" alt="Calendar" src="https://github.com/user-attachments/assets/0051ab63-14c9-418e-af19-bc1e50230072" />
 
-## Core Features
+### Apps
+<img width="1075" height="745" alt="Apps" src="https://github.com/user-attachments/assets/9d83194e-1dd1-46e7-b8ed-f5e85ed9d9d1" />
 
-- 🕒 **Foreground Tracking**: Time is counted only while an app is focused.
-- 📊 **Analytics**: View top apps, rollups, and trends.
-- 📅 **Calendar View**: Scan your usage patterns by day.
-- 🎮 **Rewards (Optional)**: Enable or disable per-app reward progression.
-- 🔄 **Updates**: Manual and automatic release checks from GitHub.
-- 🎨 **Themes**: Switch accent color presets from Settings.
+## Features
 
-## 🖼️ Screenshots
-
-Replace these placeholders with your real screenshots.
-
-## Dashboard
-<img width="1073" height="737" alt="{431FD81B-B68E-4BCB-96A6-52BDF4A4AC81}" src="https://github.com/user-attachments/assets/9321c718-12b5-4900-bf14-4b7efd1281f4" />
-
-
-
-## Calendar
-<img width="1078" height="744" alt="{1FCC47E2-6700-4421-8C2A-F0F119DAADD3}" src="https://github.com/user-attachments/assets/0051ab63-14c9-418e-af19-bc1e50230072" />
-
-
-
-## Apps
-<img width="1075" height="745" alt="{4CC7C304-8189-4984-9CAA-E07EFE9FE8F8}" src="https://github.com/user-attachments/assets/9d83194e-1dd1-46e7-b8ed-f5e85ed9d9d1" />
+- **Foreground-only tracking.** Background time is never counted. If you switched away, the clock stops.
+- **Idle detection.** Configurable idle threshold (default 5 minutes) pauses tracking when you step away.
+- **Dashboard.** Live view of what you are currently using, today's total, this week's total, and your top apps.
+- **Calendar view.** Browse usage by day to spot patterns over time.
+- **Per-app detail.** Open any app to see its full session history and totals.
+- **Rewards system.** Optional progression layer with XP, levels, credits, and a resource-collection mini-game tied to your usage goals. Can be disabled entirely.
+- **Streak tracking.** Keeps a daily streak for apps you have marked as favorites, based on 30+ minutes of focused use.
+- **Theme presets.** Several accent color options. Changes apply on next launch.
+- **System tray and autostart.** Minimize to tray and optionally launch at login via the Windows registry.
+- **Data export.** Export your history to CSV or JSON. Backup and restore the SQLite database directly.
+- **In-app updates.** Point the update feed at a GitHub releases API endpoint and check manually or automatically on startup.
 
 ## Requirements
 
-- Windows 10/11
-- Python 3.10+
+- Windows 10 or 11
+- Python 3.10 or newer (for running from source)
+
+## Installation
+
+Download the latest release from the [Releases](../../releases) page.
+
+**Standard installer (recommended)**
+
+1. Download `AppTrackr_Setup.exe`.
+2. Run the installer and follow the prompts.
+3. Launch AppTrackr from the Start Menu or desktop shortcut.
+
+**Portable build**
+
+1. Download `AppTrackr_Portable.zip`.
+2. Extract it anywhere.
+3. Run `AppTrackr.exe`.
 
 ## Developer Setup
 
-Clone the repository and install dependencies:
+Clone the repo and install in editable mode with dev dependencies:
 
 ```bash
 pip install -e ".[dev]"
 ```
 
-Run the app in development mode:
+Run the app:
 
 ```bash
 python -m apptrackr
 ```
 
-## 📦 Release Artifacts
+## Building from Source
 
-Each release publishes two user install options:
-
-- `AppTrackr_Setup.exe` for a standard Windows installation
-- `AppTrackr_Portable.zip` for no-install portable usage
-
-## End-User Installation
-
-Two distribution options are provided from Releases.
-
-### Recommended: Standard Installer
-
-1. Download `AppTrackr_Setup.exe`.
-2. Run the installer.
-3. Launch AppTrackr from Start Menu or desktop shortcut.
-
-### Optional: Portable Build
-
-1. Download `AppTrackr_Portable.zip`.
-2. Extract it to any folder.
-3. Run `AppTrackr.exe` directly.
-
-## Updates
-
-AppTrackr supports manual and automatic update checks.
-
-In `Settings -> Updates`:
-
-1. Set `Update feed URL` to the repository releases API endpoint.
-2. Click `Check for Updates` for on-demand checks.
-3. Enable `Automatically check for updates on startup` if desired.
-
-For this repo, use:
-
-`https://api.github.com/repos/H4ch1Net/AppTrackr/releases/latest`
-
-Generic format (for forks/custom repos):
-
-`https://api.github.com/repos/<owner>/<repo>/releases/latest`
-
-## Packaging (Windows)
-
-Build the app bundle with PyInstaller:
+**PyInstaller bundle**
 
 ```bash
 pyinstaller packaging/apptrackr.spec
 ```
 
-Build the installer with Inno Setup:
+**Inno Setup installer**
 
-1. Open `packaging/installer.iss`.
+1. Open `packaging/installer.iss` in Inno Setup.
 2. Compile the script.
-3. Output: `AppTrackr_Setup.exe`.
+3. The installer is written to `packaging/Output/AppTrackr_Setup.exe`.
 
 ## Release Automation
 
-The workflow at `.github/workflows/release-windows.yml` builds and publishes:
-
-- `AppTrackr_Setup.exe`
-- `AppTrackr_Portable.zip`
-
-Trigger a release by pushing a version tag:
+The workflow at `.github/workflows/release-windows.yml` handles the full build and publish pipeline. Push a version tag to trigger it:
 
 ```bash
 git tag v1.0.0
 git push origin v1.0.0
 ```
+
+The workflow builds the PyInstaller bundle, zips it as a portable archive, compiles the Inno Setup installer, and uploads both to the GitHub release.
+
+## Updates
+
+Go to **Settings > Updates**, paste in the releases API URL, and click **Check for Updates**. Enable the startup check if you want it to run automatically.
+
+For this repo, the URL is:
+
+```
+https://api.github.com/repos/H4ch1Net/AppTrackr/releases/latest
+```
+
+If AppTrackr finds a newer version it will offer to download and launch the installer for you.
+
+## Privacy
+
+Window titles are off by default. If you enable title tracking in Settings, titles are hashed (SHA-256, truncated) before storage so the raw text is never saved. Mouse click counts are optional and stored as counts only, with no position or content data.
+
+## License
+
+[MIT](LICENSE)
