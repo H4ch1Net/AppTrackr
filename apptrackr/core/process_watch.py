@@ -42,15 +42,20 @@ class ProcessWatcher:
 
     def _check(self) -> None:
         current = set()
+        today = date.today().isoformat()
         for proc in psutil.process_iter(["pid", "name", "exe"]):
             current.add(proc.pid)
             if proc.pid not in self._known_pids:
                 try:
                     exe = proc.info["name"]  # type: ignore[index]
                     exe_path = proc.info.get("exe")  # type: ignore[union-attr]
-                    if exe:
-                        app_id = queries.get_or_create_app(exe.lower(), icon_path=exe_path)
-                        queries.increment_opens(date.today().isoformat(), app_id)
+                    # Skip system/background/helper processes so we don't bloat
+                    # the apps table (and open counts) with noise the user never
+                    # actually interacts with.
+                    if not exe or queries.is_dashboard_hidden_process(exe):
+                        continue
+                    app_id = queries.get_or_create_app(exe.lower(), icon_path=exe_path)
+                    queries.increment_opens(today, app_id)
                 except Exception:
                     pass
         self._known_pids = current

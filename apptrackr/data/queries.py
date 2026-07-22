@@ -5,7 +5,6 @@ from __future__ import annotations
 import time
 import re
 from datetime import date, datetime, timedelta
-from pathlib import Path
 
 from . import db
 
@@ -53,14 +52,20 @@ _NAME_OVERRIDES = {
 
 def normalize_app_name(exe_name: str) -> str:
     """Convert exe/process names into readable app labels."""
-    key = (exe_name or "").strip().lower()
+    original = (exe_name or "").strip()
+    key = original.lower()
     if not key:
         return "Unknown App"
     if key in _NAME_OVERRIDES:
         return _NAME_OVERRIDES[key]
 
-    raw = Path(key).name
-    if raw.endswith(".exe"):
+    # Reduce to the basename regardless of separator style. proc.name() is
+    # already a basename in practice, but a full path may slip through and we
+    # want the same result on any platform (PosixPath won't split "\\").
+    # Work off the original casing so camelCase (myCoolApp) can be split before
+    # we normalise the case.
+    raw = re.split(r"[\\/]", original)[-1]
+    if raw.lower().endswith(".exe"):
         raw = raw[:-4]
 
     raw = raw.replace("_", " ").replace("-", " ")
@@ -155,9 +160,10 @@ def start_session(app_id: int, ts: float | None = None) -> int:
 
 
 def end_session(session_id: int, ts: float | None = None, was_idle: bool = False) -> None:
-    ts = ts or time.time()
+    ts = ts if ts is not None else time.time()
     db.execute(
-        "UPDATE usage_sessions SET end_ts = ?, duration_ms = CAST((? - start_ts) * 1000 AS INTEGER), was_idle = ? "
+        "UPDATE usage_sessions SET end_ts = ?, "
+        "duration_ms = MAX(0, CAST((? - start_ts) * 1000 AS INTEGER)), was_idle = ? "
         "WHERE session_id = ?",
         (ts, ts, int(was_idle), session_id),
     )

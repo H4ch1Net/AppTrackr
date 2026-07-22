@@ -8,25 +8,63 @@ import threading
 from pathlib import Path
 from typing import Any
 
-_DB_DIR = Path(os.environ.get("APPDATA", Path.home())) / "AppTrackr"
-_DB_PATH = _DB_DIR / "data.sqlite"
 _SCHEMA = Path(__file__).with_name("schema.sql")
 
 _local = threading.local()
 
 
+def _default_data_dir() -> Path:
+    """Resolve the data directory, honouring an optional override.
+
+    ``APPTRACKR_DATA_DIR`` lets users relocate their data (portable installs,
+    testing, multiple profiles) without touching the registry or APPDATA.
+    """
+    override = os.environ.get("APPTRACKR_DATA_DIR", "").strip()
+    if override:
+        return Path(override)
+    return Path(os.environ.get("APPDATA", Path.home())) / "AppTrackr"
+
+
+_data_dir = _default_data_dir()
+
+
+def get_data_dir() -> Path:
+    return _data_dir
+
+
+def set_data_dir(path: str | Path) -> None:
+    """Point the database at a different directory, closing any open handle.
+
+    Mainly used by tests and for switching profiles at runtime.
+    """
+    global _data_dir
+    close_connection()
+    _data_dir = Path(path)
+
+
 def _db_path() -> Path:
-    return _DB_PATH
+    return _data_dir / "data.sqlite"
+
+
+def close_connection() -> None:
+    """Close the calling thread's cached connection, if any."""
+    conn: sqlite3.Connection | None = getattr(_local, "conn", None)
+    if conn is not None:
+        try:
+            conn.close()
+        finally:
+            _local.conn = None
 
 
 def get_connection() -> sqlite3.Connection:
     """Return a thread-local SQLite connection (created once per thread)."""
     conn: sqlite3.Connection | None = getattr(_local, "conn", None)
     if conn is None:
-        _DB_DIR.mkdir(parents=True, exist_ok=True)
+        _data_dir.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(str(_db_path()), check_same_thread=False)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute("PRAGMA foreign_keys=ON")
         _local.conn = conn
     return conn

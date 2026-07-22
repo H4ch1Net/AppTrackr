@@ -62,6 +62,26 @@ Run the app:
 python -m apptrackr
 ```
 
+### Running the tests
+
+The core logic (analytics queries, rollups, rewards, the village economy, data
+export, and the updater) is covered by a platform-independent pytest suite that
+runs on Windows, macOS, and Linux — no GUI or Win32 dependencies required:
+
+```bash
+pip install pytest psutil
+python -m pytest
+```
+
+CI runs this suite on every push (`.github/workflows/tests.yml`) across Python
+3.10–3.12.
+
+### Custom data location
+
+By default the SQLite database lives in `%APPDATA%\AppTrackr`. Set the
+`APPTRACKR_DATA_DIR` environment variable to relocate it — handy for portable
+installs, separate profiles, or throwaway test runs.
+
 ## Building from Source
 
 **PyInstaller bundle**

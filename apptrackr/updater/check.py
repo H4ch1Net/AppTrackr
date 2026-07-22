@@ -13,7 +13,22 @@ log = logging.getLogger(__name__)
 
 
 def parse_version(v: str) -> tuple[int, ...]:
-    return tuple(int(x) for x in v.strip().lstrip("v").split("."))
+    """Parse a semver-ish string into a comparable tuple.
+
+    Tolerates a leading ``v``, pre-release/build suffixes (``1.2.0-beta``),
+    empty or missing components, and stray whitespace. Non-numeric parts are
+    treated as ``0`` so a malformed remote version can never crash the check.
+    """
+    core = (v or "").strip().lstrip("vV").split("-")[0].split("+")[0]
+    parts: list[int] = []
+    for chunk in core.split("."):
+        leading = ""
+        for c in chunk:
+            if not c.isdigit():
+                break
+            leading += c
+        parts.append(int(leading) if leading else 0)
+    return tuple(parts) or (0,)
 
 
 def check_for_update(update_url: str | None = None) -> dict | None:

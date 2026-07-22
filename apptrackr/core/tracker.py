@@ -6,10 +6,10 @@ import ctypes
 import ctypes.wintypes
 import hashlib
 import logging
-import os
+import sys
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date
 
 import psutil
@@ -18,9 +18,14 @@ from ..data import db, queries, rollup
 
 log = logging.getLogger(__name__)
 
-# Win32 API bindings
-user32 = ctypes.windll.user32  # type: ignore[attr-defined]
-kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+# Win32 API bindings. Loaded lazily so the module remains importable on
+# non-Windows platforms (tooling, tests, CI) where ``ctypes.windll`` is absent.
+if sys.platform.startswith("win"):
+    user32 = ctypes.windll.user32  # type: ignore[attr-defined]
+    kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+else:  # pragma: no cover - exercised only off-Windows
+    user32 = None
+    kernel32 = None
 
 # System / ignored executables
 _IGNORED_EXES = frozenset({
@@ -38,7 +43,6 @@ class _TrackerState:
     current_start: float = 0.0
     paused: bool = False
     running: bool = False
-    session_locked: bool = False
 
 
 class Tracker:
@@ -67,6 +71,9 @@ class Tracker:
 
     def stop(self) -> None:
         self._state.running = False
+        thread = self._thread
+        if thread is not None and thread.is_alive() and thread is not threading.current_thread():
+            thread.join(timeout=2.0)
         self._flush()
 
     def pause(self) -> None:
@@ -133,10 +140,16 @@ class Tracker:
                     self._flush_unlocked()
                 return
 
-            # Idle detection
-            if self._idle_threshold > 0 and self._get_idle_seconds() > self._idle_threshold:
+            # Idle detection. When the user goes idle we still want to keep the
+            # focused time they accrued *before* going idle – only the idle gap
+            # itself is discarded. Closing the session at the moment of last
+            # input (now - idle_seconds) preserves the real work time instead of
+            # throwing away the whole session.
+            idle_seconds = self._get_idle_seconds()
+            if self._idle_threshold > 0 and idle_seconds > self._idle_threshold:
                 if self._state.current_app_id:
-                    self._flush_unlocked(was_idle=True)
+                    active_end = time.time() - idle_seconds
+                    self._flush_unlocked(end_ts=active_end)
                 return
 
             hwnd = user32.GetForegroundWindow()
@@ -200,9 +213,9 @@ class Tracker:
         with self._lock:
             self._flush_unlocked()
 
-    def _flush_unlocked(self, was_idle: bool = False) -> None:
+    def _flush_unlocked(self, was_idle: bool = False, end_ts: float | None = None) -> None:
         if self._state.current_session_id is not None:
-            queries.end_session(self._state.current_session_id, was_idle=was_idle)
+            queries.end_session(self._state.current_session_id, ts=end_ts, was_idle=was_idle)
             rollup.rollup_session(self._state.current_session_id)
         self._state.current_app_id = None
         self._state.current_session_id = None
@@ -221,6 +234,8 @@ class Tracker:
     @staticmethod
     def _get_idle_seconds() -> float:
         """Seconds since last user input (keyboard/mouse)."""
+        if user32 is None or kernel32 is None:  # pragma: no cover - off-Windows
+            return 0.0
 
         class LASTINPUTINFO(ctypes.Structure):
             _fields_ = [("cbSize", ctypes.c_uint), ("dwTime", ctypes.c_uint)]
@@ -235,6 +250,8 @@ class Tracker:
     @staticmethod
     def _is_locked() -> bool:
         """Check if the workstation is locked."""
+        if user32 is None:  # pragma: no cover - off-Windows
+            return False
         # OpenInputDesktop returns NULL when desktop is locked / switched
         hdesk = user32.OpenInputDesktop(0, False, 0x0001)  # DESKTOP_READOBJECTS
         if hdesk:
