@@ -172,9 +172,14 @@ class MainWindow(QMainWindow):
         self._stack.setCurrentIndex(self.PAGE_APP_DETAIL)
 
     def _periodic_eval(self):
-        from ..rewards import engine
+        from ..rewards import engine, goals
+        # Global daily goals drive the always-on loop; per-app milestones are an
+        # optional extra. Streak milestones pay out one-time bonuses.
+        goals.evaluate_daily_goals()
         engine.evaluate()
-        engine.update_streak()
+        engine.auto_claim_if_enabled()
+        streak = engine.update_streak()
+        engine.grant_streak_rewards(streak)
 
     # ------------------------------------------------------------------
     # System tray
@@ -236,7 +241,8 @@ class MainWindow(QMainWindow):
         if db.get_setting("auto_update_check", "1") != "1":
             return
 
-        update_url = db.get_setting("update_url", "").strip()
+        from ..updater.manifest import get_update_url
+        update_url = db.get_setting("update_url", "").strip() or get_update_url()
         if not update_url:
             return
 

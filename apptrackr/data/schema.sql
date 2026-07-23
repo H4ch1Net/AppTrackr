@@ -72,6 +72,17 @@ CREATE TABLE IF NOT EXISTS village_state (
     state_json TEXT NOT NULL DEFAULT '{}'
 );
 
+-- Global daily-goal claims (dedupe for the zero-setup rewards loop).
+-- goal_key is a stable code identifier; day is the calendar day the goal was
+-- earned, or a sentinel like 'streak' for once-ever grants.
+CREATE TABLE IF NOT EXISTS daily_goal_claims (
+    day          TEXT NOT NULL,
+    goal_key     TEXT NOT NULL,
+    granted_json TEXT NOT NULL DEFAULT '{}',
+    ts           REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY (day, goal_key)
+);
+
 -- Settings
 CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
@@ -89,4 +100,7 @@ INSERT OR IGNORE INTO settings (key, value) VALUES
     ('autostart', '0'),
     ('minimize_to_tray', '1'),
     ('rewards_enabled', '1'),
+    ('auto_claim_rewards', '1'),
+    ('auto_update_check', '1'),
+    ('update_url', 'https://api.github.com/repos/H4ch1Net/AppTrackr/releases/latest'),
     ('polling_hz', '4');

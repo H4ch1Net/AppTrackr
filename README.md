@@ -20,12 +20,13 @@ A Windows desktop app that tracks which applications you actually use, and for h
 - **Dashboard.** Live view of what you are currently using, today's total, this week's total, and your top apps.
 - **Calendar view.** Browse usage by day to spot patterns over time.
 - **Per-app detail.** Open any app to see its full session history and totals.
-- **Rewards system.** Optional progression layer with XP, levels, credits, and a resource-collection mini-game tied to your usage goals. Can be disabled entirely.
-- **Streak tracking.** Keeps a daily streak for apps you have marked as favorites, based on 30+ minutes of focused use.
+- **Rewards system.** An always-on progression layer that works out of the box — no setup. Daily goals reward your total tracked time and app launches with XP, levels, credits, and crafting resources. Rewards are applied automatically (no manual claiming). Can be disabled entirely.
+- **Neon Village mini-game.** Spend the resources you earn to build and upgrade a village. Buildings have real effects: the **workshop** boosts XP gains, **storage** raises your resource cap, **houses** add villagers who generate resources every day, and the **tavern** boosts streak rewards. It forms a satisfying loop: use your apps → earn resources → build → earn faster.
+- **Streak tracking.** Keeps a daily streak for favorite apps (30+ minutes of focused use) and pays out one-time bonus rewards at 3, 7, 14, and 30 days.
 - **Theme presets.** Several accent color options. Changes apply on next launch.
 - **System tray and autostart.** Minimize to tray and optionally launch at login via the Windows registry.
 - **Data export.** Export your history to CSV or JSON. Backup and restore the SQLite database directly.
-- **In-app updates.** Point the update feed at a GitHub releases API endpoint and check manually or automatically on startup.
+- **In-app updates.** Ships with a default GitHub releases feed, so update checks work out of the box — check manually or automatically on startup.
 
 ## Requirements
 

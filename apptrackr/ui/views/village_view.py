@@ -151,14 +151,27 @@ class VillageView(QWidget):
             if item.widget():
                 item.widget().deleteLater()
 
+        from ...rewards import engine as reward_engine
+        bonuses = game_state.get_bonuses()
+        cap = reward_engine.BASE_RESOURCE_CAP + bonuses.get("resource_cap_bonus", 0)
+
         inv = village.get("inventory", {})
         icons = {"wood": "🪵", "stone": "🪨", "metal": "⚙️", "food": "🍖", "blueprints": "📜"}
         for res, icon in icons.items():
             val = inv.get(res, 0)
-            item = QLabel(f"{icon} {res.title()}: {val}")
-            item.setStyleSheet(f"color: {theme.TEXT}; font-weight: 600; padding: 4px 12px; background: transparent;")
+            near_cap = val >= cap
+            item = QLabel(f"{icon} {res.title()}: {val} / {cap}")
+            color = theme.YELLOW if near_cap else theme.TEXT
+            item.setStyleSheet(f"color: {color}; font-weight: 600; padding: 4px 12px; background: transparent;")
             self._inv_layout.addWidget(item)
         self._inv_layout.addStretch()
+
+        # Villager income hint – makes the value of houses tangible.
+        villagers = village.get("villagers", 0)
+        if villagers > 0:
+            hint = QLabel(f"🏠 {villagers} villager(s) generate resources daily")
+            hint.setStyleSheet(f"color: {theme.TEXT_MUTED}; font-size: 11px; background: transparent;")
+            self._inv_layout.addWidget(hint)
 
         # Buildings
         while self._buildings_grid.count():

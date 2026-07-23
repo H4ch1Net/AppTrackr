@@ -69,6 +69,22 @@ class TestParseVersion:
         assert not (check.parse_version("") > check.parse_version("1.0.0"))
 
 
+class TestManifest:
+    def test_version_matches_package(self):
+        from apptrackr import __version__
+        from apptrackr.updater import manifest
+        assert manifest.CURRENT_VERSION == __version__
+
+    def test_default_update_url_configured(self):
+        from apptrackr.updater import manifest
+        assert manifest.get_update_url().startswith("https://api.github.com/")
+
+    def test_env_override_wins(self, monkeypatch):
+        from apptrackr.updater import manifest
+        monkeypatch.setenv("APPTRACKR_UPDATE_URL", "https://example.test/feed")
+        assert manifest.get_update_url() == "https://example.test/feed"
+
+
 class TestCheckForUpdate:
     def test_empty_url_returns_none(self):
         assert check.check_for_update("") is None

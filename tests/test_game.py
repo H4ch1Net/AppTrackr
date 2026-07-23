@@ -45,19 +45,19 @@ def test_build_deducts_resources_and_levels_building():
     assert ok is True
     village = state.get_village()
     assert village["buildings"]["workshop"]["level"] == 1
-    assert village["inventory"]["wood"] == 80  # 100 - 20
-    assert village["inventory"]["stone"] == 90  # 100 - 10
+    assert village["inventory"]["wood"] == 85  # 100 - 15
+    assert village["inventory"]["stone"] == 92  # 100 - 8
 
 
 def test_upgrade_cost_scales_with_level():
     _set_level(1)
     _set_inventory(wood=100, stone=100)
-    state.build_or_upgrade("workshop")  # level 1: 20 wood / 10 stone
-    state.build_or_upgrade("workshop")  # level 2 costs x2: 40 wood / 20 stone
+    state.build_or_upgrade("workshop")  # level 1: 15 wood / 8 stone
+    state.build_or_upgrade("workshop")  # level 2 costs x2: 30 wood / 16 stone
     village = state.get_village()
     assert village["buildings"]["workshop"]["level"] == 2
-    assert village["inventory"]["wood"] == 40  # 100 - 20 - 40
-    assert village["inventory"]["stone"] == 70  # 100 - 10 - 20
+    assert village["inventory"]["wood"] == 55  # 100 - 15 - 30
+    assert village["inventory"]["stone"] == 76  # 100 - 8 - 16
 
 
 def test_house_adds_villager():

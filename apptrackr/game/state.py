@@ -8,12 +8,12 @@ from ..data import db
 
 # Building definitions: name → {cost, unlock_level, bonus_description}
 BUILDINGS = {
-    "workshop":  {"wood": 20, "stone": 10, "unlock_level": 1, "max_level": 5,
+    "workshop":  {"wood": 15, "stone": 8, "unlock_level": 1, "max_level": 5,
                   "desc": "Produces bonus XP (+5% per level)"},
-    "storage":   {"wood": 15, "stone": 15, "unlock_level": 1, "max_level": 5,
+    "storage":   {"wood": 12, "stone": 12, "unlock_level": 1, "max_level": 5,
                   "desc": "Increases resource cap (+50 per level)"},
-    "house":     {"wood": 25, "food": 10, "unlock_level": 2, "max_level": 5,
-                  "desc": "Adds +1 villager per level"},
+    "house":     {"wood": 18, "food": 8, "unlock_level": 2, "max_level": 5,
+                  "desc": "+1 villager (each generates resources daily)"},
     "lab":       {"stone": 20, "metal": 15, "blueprints": 1, "unlock_level": 3, "max_level": 3,
                   "desc": "Unlocks advanced reward tiers"},
     "tavern":    {"wood": 30, "food": 20, "unlock_level": 4, "max_level": 3,

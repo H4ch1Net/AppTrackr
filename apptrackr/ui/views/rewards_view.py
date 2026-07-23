@@ -14,8 +14,19 @@ from PySide6.QtGui import QColor
 from .. import theme
 from ..widgets.components import NeonCard, StatValue
 from ...rewards import engine as reward_engine
+from ...rewards import goals as reward_goals
 from ...rewards import rules as reward_rules
 from ...data import queries
+
+
+def _format_metric(metric: str, value: int) -> str:
+    if metric == "focused_ms":
+        return theme.format_ms(value)
+    return str(value)
+
+
+def _reward_text(reward: dict) -> str:
+    return "  ".join(f"+{v} {k}" for k, v in reward.items())
 
 
 class RewardCard(QFrame):
@@ -95,7 +106,14 @@ class RewardsView(QWidget):
             stats_row.addWidget(card)
         layout.addLayout(stats_row)
 
-        # Claim all
+        # Today's goals – the always-on progression loop.
+        goals_card = NeonCard(glow_color=theme.BG_CARD, title="TODAY'S GOALS")
+        self._goals_layout = QVBoxLayout()
+        self._goals_layout.setSpacing(6)
+        goals_card.content_layout().addLayout(self._goals_layout)
+        layout.addWidget(goals_card)
+
+        # Claim all (only needed when auto-claim is turned off)
         btn_row = QHBoxLayout()
         self._claim_all_btn = QPushButton("✨ Claim All Rewards")
         self._claim_all_btn.setObjectName("primary")
@@ -122,15 +140,21 @@ class RewardsView(QWidget):
         layout.addWidget(scroll, stretch=1)
 
     def refresh(self):
-        # Profile
+        # Drive the loop: grant daily goals, per-app milestones, and streaks.
+        reward_goals.evaluate_daily_goals()
+        reward_engine.evaluate()
+        reward_engine.auto_claim_if_enabled()
+        streak = reward_engine.update_streak()
+        reward_engine.grant_streak_rewards(streak)
+
+        # Profile (read after granting so it reflects the latest rewards)
         profile = reward_engine.get_profile()
         self._xp_stat.set_value(str(profile.get("xp", 0)))
         self._level_stat.set_value(str(profile.get("level", 1)))
         self._streak_stat.set_value(str(profile.get("streak_days", 0)))
         self._credits_stat.set_value(str(profile.get("credits", 0)))
 
-        # Evaluate new rewards first
-        reward_engine.evaluate()
+        self._render_goals()
 
         # Unclaimed
         unclaimed = reward_engine.unclaimed_rewards()
@@ -151,6 +175,30 @@ class RewardsView(QWidget):
             card = RewardCard(evt)
             card.claimed.connect(self._on_claim)
             self._rewards_layout.insertWidget(i, card)
+
+    def _render_goals(self):
+        while self._goals_layout.count():
+            item = self._goals_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        summary = reward_goals.daily_summary()
+        for goal in summary["goals"]:
+            done = goal["done"]
+            tick = "✅" if done else "⬜"
+            target = _format_metric(goal["metric"], goal["threshold"])
+            current = _format_metric(goal["metric"], min(goal["current"], goal["threshold"]))
+            label = "Focus" if goal["metric"] == "focused_ms" else "Opens"
+            text = f"{tick}  {label} {target}   ({current})   {_reward_text(goal['reward'])}"
+            row = QLabel(text)
+            color = theme.GREEN if done else theme.TEXT_DIM
+            row.setStyleSheet(f"color: {color}; font-size: 12px; background: transparent;")
+            self._goals_layout.addWidget(row)
+
+        if summary["next_goal"] is None:
+            done_lbl = QLabel("🎉 All daily goals complete — see you tomorrow!")
+            done_lbl.setStyleSheet(f"color: {theme.get_accent()}; font-weight: 600; background: transparent;")
+            self._goals_layout.addWidget(done_lbl)
 
     def _on_claim(self, event_id: int):
         reward_engine.claim_reward(event_id)
