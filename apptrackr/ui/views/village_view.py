@@ -9,13 +9,14 @@ from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QProgressBar, QVBoxLayou
 from ...game import economy
 from ...game import state as game_state
 from ...rewards import engine as rewards
-from .. import fmt, theme
+from .. import fmt, motion, theme
 from ..signals import bus
 from ..widgets.components import (
     Card,
     Page,
     PageHeader,
     StatTile,
+    animate_progress,
     button,
     clear_layout,
     icon_label,
@@ -37,12 +38,24 @@ RESOURCE_ICONS = {"wood": "tree-pine", "stone": "mountain", "metal": "cog", "foo
 class LevelPips(QWidget):
     """Row of segments showing a building's level out of its maximum."""
 
-    def __init__(self, level: int, maximum: int, parent=None):
+    def __init__(self, level: int, maximum: int, previous: int | None = None, parent=None):
         super().__init__(parent)
-        self._level, self._max = level, maximum
+        self._target, self._max = level, maximum
+        self._level = float(level if previous is None else previous)
         self.setFixedHeight(6)
         self.setMinimumWidth(40)
         self.setToolTip(f"Level {level} of {maximum}")
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self._level != self._target:
+            motion.tween(
+                self, self._level, float(self._target), motion.SLOWER, self._set_level, motion.DECELERATE, key="pips"
+            )
+
+    def _set_level(self, value: float) -> None:
+        self._level = value
+        self.update()
 
     def paintEvent(self, _event):
         t = theme.current()
@@ -52,8 +65,13 @@ class LevelPips(QWidget):
         gap = 4
         w = (self.width() - gap * (self._max - 1)) / self._max
         for i in range(self._max):
-            p.setBrush(QColor(t.accent if i < self._level else t.track))
-            p.drawRoundedRect(QRectF(i * (w + gap), 0, w, self.height()), 3, 3)
+            x = i * (w + gap)
+            p.setBrush(QColor(t.track))
+            p.drawRoundedRect(QRectF(x, 0, w, self.height()), 3, 3)
+            fill = min(1.0, max(0.0, self._level - i))  # partially filled while animating
+            if fill > 0:
+                p.setBrush(QColor(t.accent))
+                p.drawRoundedRect(QRectF(x, 0, w * fill, self.height()), 3, 3)
 
 
 class VillageView(Page):
@@ -98,6 +116,10 @@ class VillageView(Page):
         self.add(self.buildings)
         self.layout_.addStretch(1)
 
+        self._amounts: dict[str, int] = {}
+        self._levels: dict[str, int] = {}
+        self._cards: dict[str, Card] = {}
+        self._just_built: str | None = None
         bus.rewards_changed.connect(lambda: self.isVisible() and self.refresh())
 
     def refresh(self) -> None:
@@ -107,9 +129,9 @@ class VillageView(Page):
         cap = bonuses["resource_cap"]
 
         into, need = economy.level_progress(profile["xp"])
-        self.t_level.set(str(profile["level"]), f"{need - into} XP to next level")
-        self.t_villagers.set(str(village.get("villagers", 0)), "One per house level")
-        self.t_credits.set(fmt.count(profile["credits"]), "Earned by leveling up")
+        self.t_level.set_number(profile["level"], _count, f"{need - into} XP to next level")
+        self.t_villagers.set_number(village.get("villagers", 0), _count, "One per house level")
+        self.t_credits.set_number(profile["credits"], lambda v: fmt.count(int(round(v))), "Earned by leveling up")
         active = [
             f"+{bonuses['xp_bonus_pct']}% XP" if bonuses["xp_bonus_pct"] else "",
             f"+{bonuses['resource_bonus_pct']}% resources" if bonuses["resource_bonus_pct"] else "",
@@ -136,7 +158,8 @@ class VillageView(Page):
             bar = QProgressBar()
             bar.setTextVisible(False)
             bar.setMaximum(cap)
-            bar.setValue(min(cap, amount))
+            animate_progress(bar, self._amounts.get(res, 0), min(cap, amount))
+            self._amounts[res] = min(cap, amount)
             if amount >= cap:
                 bar.setProperty("tone", "gold")
             cell.addWidget(bar)
@@ -156,8 +179,15 @@ class VillageView(Page):
         self.market_grid.setColumnStretch(1, 1)
 
         clear_layout(self.buildings)
+        self._cards = {}
         for i, name in enumerate(game_state.BUILDINGS):
-            self.buildings.addWidget(self._building_card(name, village, profile["level"]), i // 3, i % 3)
+            card = self._building_card(name, village, profile["level"])
+            self._cards[name] = card
+            self.buildings.addWidget(card, i // 3, i % 3)
+        self._levels = {name: game_state.building_level(village, name) for name in game_state.BUILDINGS}
+        if self._just_built in self._cards:
+            motion.flash(self._cards[self._just_built])
+        self._just_built = None
         for c in range(3):
             self.buildings.setColumnStretch(c, 1)
 
@@ -180,7 +210,7 @@ class VillageView(Page):
         top.addWidget(pill)
         card.body.addLayout(top)
 
-        card.body.addWidget(LevelPips(level, spec["max_level"]))
+        card.body.addWidget(LevelPips(level, spec["max_level"], self._levels.get(name)))
 
         card.body.addWidget(label(spec["desc"], "dim", wrap=True))
 
@@ -214,10 +244,19 @@ class VillageView(Page):
     def _build(self, name: str) -> None:
         ok, msg = game_state.build_or_upgrade(name)
         self.ctx.toast(msg, "success" if ok else "danger")
-        bus.rewards_changed.emit()
-        self.refresh()
+        if ok:
+            self._just_built = name
+        bus.rewards_changed.emit()  # refreshes this page while it is visible
+        if not self.isVisible():
+            self.refresh()
 
     def _buy(self, resource: str) -> None:
         ok, msg = game_state.buy(resource)
         self.ctx.toast(msg, "success" if ok else "danger")
-        self.refresh()
+        bus.rewards_changed.emit()
+        if not self.isVisible():
+            self.refresh()
+
+
+def _count(n: float) -> str:
+    return str(int(round(n)))

@@ -26,6 +26,7 @@ dependencies = [
 dev = [
     "pytest>=8.0",
     "ruff>=0.6",
+    "pillow>=10",  # scripts/record_demo.py
     "pyinstaller>=6.0; sys_platform == 'win32'",
 ]
 

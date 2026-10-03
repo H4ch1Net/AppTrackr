@@ -53,10 +53,12 @@ def main() -> int:
     from apptrackr.core.platform import DemoPlatform
     from apptrackr.core.tracker import Tracker
     from apptrackr.data import db, demo, queries
+    from apptrackr.ui import motion
     from apptrackr.ui.main import MainWindow, prepare_app
 
     db.init_db()
     demo.seed()
+    motion.force(False)  # capture final states, not mid-transition frames
     app = QApplication(sys.argv[:1])
     prepare_app(app)
 
@@ -104,8 +106,6 @@ def main() -> int:
     window.apply_theme()
     window.show_page("dashboard")
     shot("dashboard-light")
-    window.show_page("calendar")
-    shot("calendar-light")
 
     tracker.stop()
     window.quit()

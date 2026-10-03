@@ -17,7 +17,13 @@ def temp_db(tmp_path):
     paths.set_data_dir(tmp_path)
     db.configure(tmp_path / "data.sqlite")
     db.init_db()
+    from apptrackr.ui import motion
+
+    motion.force(None)
+    motion._cached = None
     yield tmp_path / "data.sqlite"
+    motion.force(None)
+    motion._cached = None
     db.close()
     db.configure(None)
     paths.set_data_dir(None)

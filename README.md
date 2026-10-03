@@ -13,7 +13,7 @@ shows it as a dashboard, calendar and per-app history, and stays out of the way 
 ![Python](https://img.shields.io/badge/python-3.10%2B-3776ab)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-<img src="docs/screenshots/dashboard.png" alt="Dashboard" width="900">
+<img src="docs/screenshots/demo.gif" alt="AppTrackr in motion: dashboard, calendar, apps, rewards and a theme switch" width="900">
 
 </div>
 
@@ -39,6 +39,7 @@ time in chosen apps into XP and a small village-building game.
 | Control | Per-app daily limits with notifications, exclude any app (with undo), pause from the tray for a set time |
 | Rewards | Optional XP, levels, streaks and the Neon Village game with buildings that boost future rewards |
 | Desktop | Tray icon with live tooltip, launch at sign-in (starts hidden), single instance, dark, light or system theme with 8 accents |
+| Motion | Fluent-timed page transitions, counters, chart and list motion that explain each change; follows Windows *Animation effects* and can be turned off in Settings |
 | Data | CSV and JSON export, consistent database backup and validated restore, automatic schema migrations |
 | Updates | Once-a-day check against GitHub releases, in-app download and install |
 
@@ -46,24 +47,25 @@ time in chosen apps into XP and a small village-building game.
 
 <table>
   <tr>
+    <td width="50%"><img src="docs/screenshots/dashboard.png" alt="Dashboard"><br><sub>Dashboard with the live session, today by hour and top apps</sub></td>
     <td width="50%"><img src="docs/screenshots/calendar.png" alt="Calendar"><br><sub>Calendar heatmap with the selected day's breakdown</sub></td>
-    <td width="50%"><img src="docs/screenshots/apps.png" alt="Apps"><br><sub>All apps for a period, filterable and sortable</sub></td>
   </tr>
   <tr>
+    <td><img src="docs/screenshots/apps.png" alt="Apps"><br><sub>All apps for a period, filterable and sortable</sub></td>
     <td><img src="docs/screenshots/app-detail.png" alt="App detail"><br><sub>Per-app history, limit, rewards and sessions</sub></td>
+  </tr>
+  <tr>
     <td><img src="docs/screenshots/rewards.png" alt="Rewards"><br><sub>Level progress, pending rewards and earning apps</sub></td>
-  </tr>
-  <tr>
     <td><img src="docs/screenshots/village.png" alt="Village"><br><sub>Neon Village: buildings, inventory and market</sub></td>
-    <td><img src="docs/screenshots/settings.png" alt="Settings"><br><sub>Settings apply immediately</sub></td>
   </tr>
   <tr>
+    <td><img src="docs/screenshots/settings.png" alt="Settings"><br><sub>Settings apply immediately</sub></td>
     <td><img src="docs/screenshots/dashboard-light.png" alt="Dashboard in the light theme"><br><sub>Light theme</sub></td>
-    <td><img src="docs/screenshots/calendar-light.png" alt="Calendar in the light theme"><br><sub>Light theme, calendar</sub></td>
   </tr>
 </table>
 
-Screenshots are generated from demo data with `python scripts/screenshots.py`.
+Screenshots and the animation above are generated from demo data with `python scripts/screenshots.py`
+and `python scripts/record_demo.py`.
 
 ## Installation
 
@@ -118,6 +120,14 @@ AppTrackr.exe [--minimized] [--demo] [--data-dir PATH] [--debug] [--version]
 
 Starting AppTrackr while it is already running brings the existing window to the front.
 
+### Motion
+
+Animations use Fluent 2 timing (100 to 400 ms, decelerate curves for things that enter, easy-ease for
+things that move) and only run in response to a change: a page opens, a filter changes, a value updates
+or an item is removed. Background refreshes morph values in place instead of replaying entrances.
+AppTrackr follows Windows' *Settings > Accessibility > Visual effects > Animation effects*; the
+*Animations* switch under Settings > Appearance overrides it.
+
 ## Configuration
 
 All settings live in the app and apply immediately. Storage locations and two environment
@@ -171,6 +181,7 @@ python -m apptrackr               # real tracking (Windows)
 | Tests | `pytest` |
 | Lint and format | `ruff check . && ruff format .` |
 | Regenerate screenshots | `python scripts/screenshots.py` |
+| Record the README animation | `python scripts/record_demo.py` |
 | Rebuild the app icon | `python scripts/make_icon.py` |
 | Build the app folder | `pyinstaller packaging/apptrackr.spec` |
 | Build the installer | `iscc /DAppVersion=1.1.0 packaging\installer.iss` |
@@ -202,10 +213,10 @@ apptrackr/
   rewards/           milestone rules, reward engine, streaks
   game/              village state and balance values
   updater/           GitHub release check and installer download
-  ui/                main window, theme tokens, icons, views and shared widgets
+  ui/                main window, theme and motion tokens, icons, views and shared widgets
   assets/            logo and Lucide icons
 packaging/           PyInstaller spec, Inno Setup script, app icon
-scripts/             screenshot and icon generators
+scripts/             screenshot, demo animation and icon generators
 tests/               pytest suite (data, tracker, rewards, updater, offscreen UI)
 ```
 

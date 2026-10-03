@@ -3,17 +3,19 @@
 from __future__ import annotations
 
 import logging
+import math
 import sys
 import tempfile
 import time
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import QPoint, Qt, QTimer
-from PySide6.QtGui import QAction, QGuiApplication, QKeySequence, QShortcut
+from PySide6.QtCore import QPoint, QRectF, Qt, QTimer
+from PySide6.QtGui import QAction, QGuiApplication, QIcon, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -31,7 +33,7 @@ from ..core.limits import LimitMonitor
 from ..data import db, queries
 from ..rewards import engine as rewards
 from ..updater import check as updater
-from . import fmt, icons, theme
+from . import fmt, icons, motion, theme
 from .signals import bus, run_async
 from .widgets.components import Badge, IconBinding, Toast, label, tone_color
 
@@ -82,6 +84,9 @@ class MainWindow(QMainWindow):
         self.ctx = AppContext(self, tracker, clicks, demo)
         self._tracker = tracker
         self._history: list[str] = []
+        blank = QPixmap(16, 16)
+        blank.fill(Qt.GlobalColor.transparent)
+        self._blank_icon = QIcon(blank)
         self._current = "dashboard"
         self._limits = LimitMonitor()
         self._quitting = False
@@ -167,8 +172,13 @@ class MainWindow(QMainWindow):
         lay.addLayout(brand)
         lay.addSpacing(18)
 
+        self._indicator = QFrame(side)
+        self._indicator.setObjectName("navIndicator")
+        self._indicator.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self._indicator.hide()
         self._nav_group = QButtonGroup(self)
         self._nav_group.setExclusive(True)
+        self._nav_group.buttonToggled.connect(lambda btn, on: on and self._move_indicator(btn))
         self._nav_buttons: dict[str, QPushButton] = {}
         self._badges: dict[str, Badge] = {}
         for i, (key, text, icon) in enumerate(NAV, start=1):
@@ -183,6 +193,9 @@ class MainWindow(QMainWindow):
         self._status.setFocusPolicy(Qt.FocusPolicy.TabFocus)
         self._status.setToolTip("Pause or resume tracking (Ctrl+Shift+P)")
         self._status.clicked.connect(self.toggle_pause)
+        self._status.installEventFilter(self)
+        self._pulse = motion.PulseDot(5, self._status)
+        self._pulse.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         lay.addWidget(self._status)
 
         self._version = label(f"v{__version__}", "caption")
@@ -210,13 +223,48 @@ class MainWindow(QMainWindow):
         return btn
 
     def eventFilter(self, obj, event):
-        if event.type() == event.Type.Resize and isinstance(obj, QPushButton):
+        if event.type() in (event.Type.Resize, event.Type.Move, event.Type.Show, event.Type.Hide):
+            if obj is self._status:
+                self._pulse.move(10, (self._status.height() - self._pulse.height()) // 2)
             for key, btn in self._nav_buttons.items():
                 if btn is obj:
                     badge = self._badges[key]
                     badge.adjustSize()
                     badge.move(btn.width() - badge.width() - 10, (btn.height() - badge.height()) // 2)
+                    if btn.isChecked() and not self._indicator_moving():
+                        self._move_indicator(btn, animate=False)
         return super().eventFilter(obj, event)
+
+    # Selection indicator ---------------------------------------------------------
+
+    INDICATOR_H = 16
+
+    def _indicator_rect(self, btn: QPushButton) -> QRectF:
+        return QRectF(btn.x() + 2, btn.y() + (btn.height() - self.INDICATOR_H) / 2, 3, self.INDICATOR_H)
+
+    def _indicator_moving(self) -> bool:
+        return motion.running(self, "indicator") is not None
+
+    def _move_indicator(self, btn: QPushButton, animate: bool = True) -> None:
+        """Glide the accent bar to the selected item, stretching mid-flight like Fluent's NavigationView."""
+        if not btn.isVisible():
+            self._indicator.hide()
+            return
+        end = self._indicator_rect(btn)
+        start = QRectF(self._indicator.geometry()) if self._indicator.isVisible() else end
+        self._indicator.show()
+        self._indicator.raise_()
+
+        def step(t: float) -> None:
+            eased = motion.EASY_EASE.valueForProgress(t)
+            stretch = math.sin(math.pi * t) * abs(end.y() - start.y()) * 0.35
+            y = motion.lerp(start.y(), end.y(), eased)
+            self._indicator.setGeometry(QRectF(end.x(), y - stretch / 2, 3, self.INDICATOR_H + stretch).toRect())
+
+        if not animate or start == end:
+            step(1.0)
+            return
+        motion.tween(self, 0.0, 1.0, motion.GENTLE, step, motion.LINEAR, key="indicator")
 
     # ------------------------------------------------------------------
     # Navigation
@@ -227,6 +275,7 @@ class MainWindow(QMainWindow):
             return
         if remember and key != self._current and self._current != "app":
             self._history = [self._current]
+        changed = key != self._current
         self._current = key
         view = self._views[key]
         self._stack.setCurrentWidget(view)
@@ -235,6 +284,12 @@ class MainWindow(QMainWindow):
             btn.setChecked(True)
         if hasattr(view, "refresh"):
             view.refresh()
+        if changed:
+            self._enter(view)
+
+    def _enter(self, view: QWidget) -> None:
+        """Fade-through page transition: the incoming page fades up from the window background."""
+        motion.fade(view, 0.0, 1.0, motion.NORMAL, motion.DECELERATE)
 
     def open_app(self, app_id: int) -> None:
         if self._current != "app":
@@ -242,6 +297,7 @@ class MainWindow(QMainWindow):
         self._views["app"].load_app(app_id)
         self._current = "app"
         self._stack.setCurrentWidget(self._views["app"])
+        self._enter(self._views["app"])
         for btn in self._nav_buttons.values():
             if btn.isChecked():
                 self._nav_group.setExclusive(False)
@@ -374,7 +430,10 @@ class MainWindow(QMainWindow):
         head, detail, icon = self._status_text(snap)
         tone = {"activity": "accent", "pause": "warning"}.get(icon, "text_muted")
         self._status.setText(f"{head}\n{detail}")
-        self._status.setIcon(icons.icon(icon, tone_color(tone), 16))
+        live = snap.status == trk.STATUS_TRACKING and snap.app_id is not None
+        self._pulse.set_state(live, theme.current().accent)
+        self._pulse.setVisible(live)
+        self._status.setIcon(self._blank_icon if live else icons.icon(icon, tone_color(tone), 16))
         if getattr(self, "_tray", None):
             today = queries.total_ms(queries.today_str(), queries.today_str()) + snap.uncommitted_ms
             self._tray.setToolTip(f"{APP_NAME}: {head.lower()}\n{detail}\nToday: {fmt.duration(today, short=True)}")
@@ -519,6 +578,15 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def apply_theme(self) -> None:
+        if motion.enabled() and self.isVisible():
+            # Crossfade: freeze the old look in an overlay and fade it out over the new one.
+            overlay = QLabel(self.centralWidget())
+            overlay.setPixmap(self.centralWidget().grab())
+            overlay.setGeometry(self.centralWidget().rect())
+            overlay.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+            overlay.show()
+            overlay.raise_()
+            motion.fade(overlay, 1.0, 0.0, motion.GENTLE, motion.EASY_EASE, on_done=overlay.deleteLater)
         apply_app_theme(QApplication.instance())
         set_dark_titlebar(self, theme.current().dark)
         for view in self._views.values():
@@ -528,6 +596,9 @@ class MainWindow(QMainWindow):
     def showEvent(self, event) -> None:
         super().showEvent(event)
         set_dark_titlebar(self, theme.current().dark)
+        if sys.platform.startswith("win") and motion.enabled():
+            self.setWindowOpacity(0.0)
+            motion.tween(self, 0.0, 1.0, motion.FAST, self.setWindowOpacity, motion.DECELERATE, key="window")
         self._stack.setFocus()
 
     def _startup_update_check(self) -> None:

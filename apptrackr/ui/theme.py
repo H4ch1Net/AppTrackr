@@ -179,6 +179,7 @@ QPushButton[nav="true"] {{
 QPushButton[nav="true"]:hover {{ background: {t.hover}; color: {t.text}; }}
 QPushButton[nav="true"]:checked {{ background: {t.accent_soft(0.14)}; color: {t.text}; }}
 QPushButton[nav="true"]:focus {{ border: 1px solid {t.accent}; }}
+QFrame#navIndicator {{ background: {t.accent}; border: none; border-radius: 1px; }}
 QLabel#navBadge {{
     background: {t.accent}; color: {t.on_accent}; border-radius: 9px;
     font-size: 11px; font-weight: 700; padding: 0 6px;
@@ -262,7 +263,8 @@ QPushButton[segment="true"] {{
     color: {t.text_dim}; padding: 5px 12px; font-weight: 600;
 }}
 QPushButton[segment="true"]:hover {{ color: {t.text}; }}
-QPushButton[segment="true"]:checked {{ background: {t.surface_alt}; color: {t.text}; border-color: {t.border_strong}; }}
+QPushButton[segment="true"]:checked {{ background: transparent; color: {t.text}; border-color: transparent; }}
+QFrame#segThumb {{ background: {t.surface_alt}; border: 1px solid {t.border_strong}; border-radius: 7px; }}
 QPushButton[segment="true"]:focus {{ border-color: {t.accent}; }}
 
 /* Inputs */

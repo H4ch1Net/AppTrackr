@@ -10,7 +10,7 @@ from ...game import economy
 from ...game import state as game_state
 from ...rewards import engine as rewards
 from ...rewards import rules
-from .. import fmt
+from .. import fmt, motion, theme
 from ..signals import bus
 from ..widgets.components import (
     AppAvatar,
@@ -18,8 +18,10 @@ from ..widgets.components import (
     EmptyState,
     Page,
     PageHeader,
+    animate_progress,
     button,
     clear_layout,
+    count_to,
     icon_label,
     label,
 )
@@ -107,6 +109,10 @@ class RewardsView(Page):
         self.add(cols)
         self.layout_.addStretch(1)
 
+        self._shown: dict = {}
+        self._progress: dict[int, int] = {}
+        self._pending_rows: list[QWidget] = []
+        self._added_app: int | None = None
         bus.rewards_changed.connect(lambda: self.isVisible() and self.refresh())
         bus.data_changed.connect(lambda: self.isVisible() and self.refresh())
 
@@ -173,10 +179,8 @@ class RewardsView(Page):
         self.level.setText(f"Level {profile['level']}")
         into, need = economy.level_progress(profile["xp"])
         self.progress.setMaximum(need)
-        self.progress.setValue(into)
         self.progress_text.setText(f"{into} / {need} XP to level {profile['level'] + 1}")
-        self.stat_values["xp"].setText(fmt.count(profile["xp"]))
-        self.stat_values["credits"].setText(fmt.count(profile["credits"]))
+        self._animate_profile(profile, into)
         streak = profile["streak"]
         self.stat_values["streak"].setText(f"{streak} day{'s' if streak != 1 else ''}")
 
@@ -185,12 +189,15 @@ class RewardsView(Page):
         total = sum(len(g["event_ids"]) for g in groups)
         self.pending.title_label.setText(f"Pending rewards ({total})" if total else "Pending rewards")
         clear_layout(self.pending_list)
+        self._pending_rows = []
         if not groups:
             self.pending_list.addWidget(
                 EmptyState("gift", "Nothing to claim", "New rewards show up here as earning apps reach milestones.")
             )
         for g in groups:
-            self.pending_list.addWidget(self._pending_row(g))
+            row = self._pending_row(g)
+            self._pending_rows.append(row)
+            self.pending_list.addWidget(row)
 
         clear_layout(self.earning_list)
         milestones = rewards.next_milestones()
@@ -200,8 +207,15 @@ class RewardsView(Page):
                     "zap", "No apps are earning yet", "Pick an app below, or turn on Earn rewards from any app's page."
                 )
             )
+        progress = {}
         for item in milestones:
-            self.earning_list.addWidget(self._earning_row(item))
+            row = self._earning_row(item)
+            self.earning_list.addWidget(row)
+            progress[item["app_id"]] = row.bar_value
+            if item["app_id"] == self._added_app:
+                motion.fade(row, 0.0, 1.0, motion.NORMAL)
+        self._progress = progress
+        self._added_app = None
 
         earning = rules.earning_app_ids()
         self.add_combo.clear()
@@ -229,7 +243,7 @@ class RewardsView(Page):
         text.addWidget(label(f"{n} milestone{'s' if n != 1 else ''}", "caption"))
         lay.addLayout(text, 1)
         lay.addWidget(label(fmt.reward(group["reward"]), "accent"))
-        lay.addWidget(button("Claim", on_click=lambda ids=group["event_ids"]: self._claim(ids)))
+        lay.addWidget(button("Claim", on_click=lambda ids=group["event_ids"]: self._claim(ids, row)))
         return row
 
     def _earning_row(self, item: dict) -> QWidget:
@@ -257,13 +271,13 @@ class RewardsView(Page):
         bar = QProgressBar()
         bar.setTextVisible(False)
         bar.setMaximum(1000)
+        value = int(1000 * item["focused_ms"] / max(1, nxt["target_ms"])) if nxt else 1000
+        col.addWidget(bar)
+        animate_progress(bar, self._progress.get(item["app_id"], 0), value)
+        row.bar_value = value
         if nxt:
-            bar.setValue(int(1000 * item["focused_ms"] / max(1, nxt["target_ms"])))
-            col.addWidget(bar)
             col.addWidget(label(f"Next: {fmt.reward(nxt['reward'], ', ')}", "caption"))
         else:
-            bar.setValue(1000)
-            col.addWidget(bar)
             col.addWidget(label("All milestones reached today", "caption"))
         lay.addLayout(col, 1)
         remove = button(
@@ -271,45 +285,92 @@ class RewardsView(Page):
             kind="ghost",
             icon="x",
             tooltip=f"Stop earning rewards for {item['name']}",
-            on_click=lambda: self._remove_app(item["app_id"], item["name"]),
+            on_click=lambda: self._remove_app(item["app_id"], item["name"], row),
         )
         lay.addWidget(remove, 0, Qt.AlignmentFlag.AlignTop)
         return row
 
     # ------------------------------------------------------------------
 
-    def _claim(self, event_ids: list[int]) -> None:
-        self._report(rewards.claim_many(event_ids))
+    def _animate_profile(self, profile: dict, into: int) -> None:
+        """Count XP and credits, and fill the level bar (wrapping on a level-up)."""
+        shown = self._shown
+        self._shown = {"xp": profile["xp"], "credits": profile["credits"], "level": profile["level"], "into": into}
+        if not shown:
+            self.progress.setValue(into)
+            self.stat_values["xp"].setText(fmt.count(profile["xp"]))
+            self.stat_values["credits"].setText(fmt.count(profile["credits"]))
+            return
+        for key in ("xp", "credits"):
+            if shown[key] != profile[key]:
+                count_to(self.stat_values[key], shown[key], profile[key], lambda v: fmt.count(int(round(v))))
+        if profile["level"] > shown["level"]:
+            bar = self.progress
+
+            def restart():
+                bar.setValue(0)
+                animate_progress(bar, 0, into)
+
+            motion.tween(
+                bar,
+                float(shown["into"]),
+                float(bar.maximum()),
+                motion.SLOW,
+                lambda v: bar.setValue(int(v)),
+                motion.EASY_EASE,
+                restart,
+                key="progress",
+            )
+            motion.flash(self.level, theme.current().gold, radius=6)
+        elif shown["into"] != into:
+            animate_progress(self.progress, shown["into"], into)
+
+    def _claim(self, event_ids: list[int], row: QWidget) -> None:
+        motion.collapse(row, lambda: self._report(rewards.claim_many(event_ids)))
 
     def _claim_all(self) -> None:
-        self._report(rewards.claim_many())
+        rows = [r for r in self._pending_rows if r is not None]
+        if not rows:
+            return
+        self.claim_all.setEnabled(False)
+        for row in rows[1:]:
+            motion.collapse(row, lambda: None)
+        motion.collapse(rows[0], lambda: self._report(rewards.claim_many()))
 
     def _report(self, applied: dict) -> None:
-        bus.rewards_changed.emit()
-        self.refresh()
+        bus.rewards_changed.emit()  # refreshes this page while it is visible
+        if not self.isVisible():
+            self.refresh()
         if applied:
+            motion.flash(self.profile)
             msg = "Claimed " + fmt.reward({k: v for k, v in applied.items() if k != "level_up"}, ", ")
             if applied.get("level_up"):
                 msg += f". Level {applied['level_up']} reached!"
             self.ctx.toast(msg)
+
+    def _changed(self) -> None:
+        bus.rewards_changed.emit()
+        if not self.isVisible():
+            self.refresh()
 
     def _add_app(self) -> None:
         app_id = self.add_combo.currentData()
         if app_id is None:
             return
         rules.enable_app_rewards(app_id, True)
+        self._added_app = app_id
         self.ctx.toast(f"{self.add_combo.currentText()} now earns rewards")
-        bus.rewards_changed.emit()
-        self.refresh()
+        self._changed()
 
-    def _remove_app(self, app_id: int, name: str) -> None:
-        rules.enable_app_rewards(app_id, False)
-        bus.rewards_changed.emit()
-        self.refresh()
+    def _remove_app(self, app_id: int, name: str, row: QWidget) -> None:
+        def remove():
+            rules.enable_app_rewards(app_id, False)
+            self._changed()
 
         def undo():
             rules.enable_app_rewards(app_id, True)
-            bus.rewards_changed.emit()
-            self.refresh()
+            self._added_app = app_id
+            self._changed()
 
+        motion.collapse(row, remove)
         self.ctx.toast(f"{name} no longer earns rewards", "info", "Undo", undo)

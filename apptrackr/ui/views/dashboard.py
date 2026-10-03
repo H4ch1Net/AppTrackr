@@ -11,7 +11,7 @@ from ...core import tracker as trk
 from ...data import db, queries
 from ...game import economy
 from ...rewards import engine as rewards
-from .. import fmt, icons
+from .. import fmt, icons, motion, theme
 from ..signals import bus
 from ..widgets.charts import Bar, BarChart, ShareBar, category_color
 from ..widgets.components import (
@@ -42,11 +42,15 @@ class NowCard(Card):
         head = QHBoxLayout()
         head.addWidget(label("NOW", "section"))
         head.addStretch(1)
+        self.pulse = motion.PulseDot(5)
+        head.addWidget(self.pulse)
         self.state = label("", "pillAccent")
         head.addWidget(self.state)
         self.body.addLayout(head)
 
-        row = QHBoxLayout()
+        self.identity = QWidget()
+        row = QHBoxLayout(self.identity)
+        row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(12)
         self.avatar = AppAvatar("", None, 40)
         row.addWidget(self.avatar)
@@ -60,7 +64,7 @@ class NowCard(Card):
         self.detail = label("", "caption", wrap=True)
         names.addWidget(self.detail)
         row.addLayout(names, 1)
-        self.body.addLayout(row)
+        self.body.addWidget(self.identity)
 
         self.timer = label("", "hero")
         self.body.addWidget(self.timer)
@@ -82,9 +86,16 @@ class NowCard(Card):
         actions.addStretch(1)
         self.body.addLayout(actions)
         self._last_app: int | None = None
+        self._last_key: tuple | None = None
 
     def update_from(self, snap: trk.Snapshot) -> None:
         tracking = snap.status == trk.STATUS_TRACKING and snap.app_id is not None
+        key = (snap.status, snap.app_id)
+        if self._last_key is not None and key != self._last_key and self.isVisible():
+            motion.fade(self.identity, 0.0, 1.0, motion.NORMAL, motion.DECELERATE)
+        self._last_key = key
+        self.pulse.set_state(tracking, theme.current().accent)
+        self.pulse.setVisible(tracking)
         self.avatar.setVisible(tracking)
         self.state_icon.setVisible(not tracking)
         self.timer.setVisible(tracking)
@@ -149,6 +160,7 @@ class DashboardView(Page):
         self._ticks = 0
         self._yesterday_hours: list[int] | None = None
         self._day_keys: list[str] = []
+        self._fractions: dict[int, float] = {}
 
         self.header = PageHeader("Dashboard", fmt.long_date(date.today()))
         self.add(self.header)
@@ -240,17 +252,15 @@ class DashboardView(Page):
         change = fmt.percent_change(today_ms, same_time)
         if change:
             role = "success" if today_ms >= same_time else "caption"
-            self.t_today.set(fmt.duration(today_ms, short=True), f"{change} vs this time yesterday", role)
+            self.t_today.set_number(today_ms, _short, f"{change} vs this time yesterday", role)
         else:
             total = sum(hours)
             sub = f"Yesterday: {fmt.duration(total, short=True)}" if total else "Nothing tracked yesterday"
-            self.t_today.set(fmt.duration(today_ms, short=True), sub)
+            self.t_today.set_number(today_ms, _short, sub)
 
         week_ms = queries.total_ms(queries.week_start(), today) + live
         days_in = date.today().weekday() + 1
-        self.t_week.set(
-            fmt.duration(week_ms, short=True), f"{fmt.duration(week_ms / days_in, short=True)} per day on average"
-        )
+        self.t_week.set_number(week_ms, _short, f"{fmt.duration(week_ms / days_in, short=True)} per day on average")
 
         profile = rewards.get_profile()
         streak = profile["streak"]
@@ -265,11 +275,7 @@ class DashboardView(Page):
         else:
             left = economy.STREAK_GOAL_MS - fav_today
             sub = f"{fmt.duration(left, short=True)} in favorites to go today"
-        self.t_streak.set(
-            f"{streak} day{'s' if streak != 1 else ''}",
-            sub,
-            tooltip="A streak day needs 30 minutes in your favorite apps.",
-        )
+        self.t_streak.set_number(streak, _days, sub, tooltip="A streak day needs 30 minutes in your favorite apps.")
 
     def _refresh_charts(self, snap: trk.Snapshot) -> None:
         today = date.today()
@@ -303,7 +309,7 @@ class DashboardView(Page):
                     app["focused_ms"] += snap.uncommitted_ms
             apps.sort(key=lambda a: -a["focused_ms"])
         total = sum(a["focused_ms"] for a in apps) or 1
-        self.t_apps.set(str(len(apps)), f"Most used: {apps[0]['name']}" if apps else "No apps yet today")
+        self.t_apps.set_number(len(apps), _count, f"Most used: {apps[0]['name']}" if apps else "No apps yet today")
 
         clear_layout(self.top_list)
         if not apps:
@@ -314,10 +320,12 @@ class DashboardView(Page):
         for app in apps[:TOP_APPS]:
             limit = app.get("daily_limit_ms")
             over = bool(limit and app["focused_ms"] >= limit)
+            fraction = app["focused_ms"] / peak
             row = AppRow(
                 app,
                 fmt.duration(app["focused_ms"], short=True),
-                app["focused_ms"] / peak,
+                fraction,
+                animate_from=self._fractions.get(app["app_id"], 0.0),
                 sub=f"Limit {fmt.duration(limit, short=True)}" + (" reached" if over else "")
                 if limit
                 else (app.get("category") or ""),
@@ -328,6 +336,7 @@ class DashboardView(Page):
             row.clicked.connect(self.ctx.open_app)
             row.context_requested.connect(self.ctx.app_menu)
             self.top_list.addWidget(row)
+        self._fractions = {a["app_id"]: a["focused_ms"] / peak for a in apps[:TOP_APPS]}
 
         by_cat: dict[str | None, int] = {}
         for app in apps:
@@ -358,3 +367,16 @@ class DashboardView(Page):
         apps_view = self.ctx.window._views["apps"]
         apps_view.set_period(0)
         self.ctx.navigate("apps")
+
+
+def _short(ms: float) -> str:
+    return fmt.duration(ms, short=True)
+
+
+def _count(n: float) -> str:
+    return str(int(round(n)))
+
+
+def _days(n: float) -> str:
+    n = int(round(n))
+    return f"{n} day{'s' if n != 1 else ''}"

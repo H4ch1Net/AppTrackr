@@ -8,10 +8,9 @@ from typing import Callable
 
 from PySide6.QtCore import (
     Property,
-    QEasingCurve,
+    QEvent,
     QFileInfo,
     QPoint,
-    QPropertyAnimation,
     QRectF,
     QSize,
     Qt,
@@ -35,7 +34,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .. import icons, theme
+from .. import icons, motion, theme
 from ..signals import bus
 
 PAGE_MARGIN = 28
@@ -85,6 +84,32 @@ def button(
             btn, icon, "text_on" if kind == "primary" else ("danger" if kind == "danger" else "text_dim")
         )
     return btn
+
+
+def count_to(lbl: QLabel, start: float, end: float, formatter: Callable[[float], str]) -> None:
+    """Animate a label's number from *start* to *end*."""
+    motion.tween(
+        lbl,
+        float(start),
+        float(end),
+        motion.SLOWER,
+        lambda v: lbl.setText(formatter(v)),
+        motion.DECELERATE,
+        key="count",
+    )
+
+
+def animate_progress(bar, start: float, end: float) -> None:
+    """Ease a QProgressBar between two values."""
+    motion.tween(
+        bar,
+        float(start),
+        float(end),
+        motion.SLOW,
+        lambda v: bar.setValue(int(round(v))),
+        motion.EASY_EASE,
+        key="progress",
+    )
 
 
 def divider() -> QFrame:
@@ -273,6 +298,9 @@ class StatTile(QFrame):
         lay.addWidget(self.value)
         self.sub = label("", "caption")
         lay.addWidget(self.sub)
+        self._number: float | None = None
+        self._formatter: Callable[[float], str] | None = None
+        self._count_on_show = False
 
     def set(self, value: str, sub: str = "", sub_role: str = "caption", tooltip: str = "") -> None:
         self.value.setText(value)
@@ -280,6 +308,51 @@ class StatTile(QFrame):
         if self.sub.property("role") != sub_role:
             set_role(self.sub, sub_role)
         self.setToolTip(tooltip)
+
+    def set_number(
+        self,
+        number: float,
+        formatter: Callable[[float], str],
+        sub: str = "",
+        sub_role: str = "caption",
+        tooltip: str = "",
+    ) -> None:
+        """Show a numeric value. Noticeable changes count toward the new value;
+        the first value counts up from zero when the tile is first shown."""
+        previous, self._number, self._formatter = self._number, number, formatter
+        self.set(self.value.text(), sub, sub_role, tooltip)
+        current = motion.running(self, "count")
+        if current is not None:
+            current.setEndValue(float(number))
+            return
+        if previous is None:
+            if self.isVisible():
+                self._count(0.0, number)
+            else:
+                self.value.setText(formatter(number))
+                self._count_on_show = True
+            return
+        if abs(number - previous) > max(abs(previous) * 0.02, 0.5) and self.isVisible():
+            self._count(previous, number)
+        else:
+            self.value.setText(formatter(number))
+
+    def reset(self) -> None:
+        """Forget the shown number so the next value counts up from zero (e.g. a different item)."""
+        self._number = None
+
+    def _count(self, start: float, end: float) -> None:
+        motion.tween(self, float(start), float(end), motion.SLOWER, self._show_count, motion.DECELERATE, key="count")
+
+    def _show_count(self, value: float) -> None:
+        if self._formatter is not None:
+            self.value.setText(self._formatter(value))
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self._count_on_show and self._number is not None:
+            self._count_on_show = False
+            self._count(0.0, self._number)
 
 
 @lru_cache(maxsize=256)
@@ -331,20 +404,42 @@ class AppAvatar(QWidget):
 class UsageBar(QWidget):
     """Thin horizontal meter with an optional limit marker."""
 
-    def __init__(self, fraction: float = 0.0, tone: str = "accent", marker: float | None = None, parent=None):
+    def __init__(
+        self,
+        fraction: float = 0.0,
+        tone: str = "accent",
+        marker: float | None = None,
+        animate_from: float | None = None,
+        parent=None,
+    ):
         super().__init__(parent)
-        self._fraction = fraction
+        self._target = fraction
+        self._fraction = fraction if animate_from is None else animate_from
         self._tone = tone
         self._marker = marker
+        self._pending = animate_from is not None and abs(animate_from - fraction) > 0.001
         self.setFixedHeight(6)
         self.setMinimumWidth(60)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
     def set_value(self, fraction: float, tone: str | None = None, marker: float | None = None) -> None:
-        self._fraction = fraction
         self._tone = tone or self._tone
         self._marker = marker
+        self._morph(fraction)
+
+    def _morph(self, fraction: float) -> None:
+        self._target = fraction
+        motion.tween(self, self._fraction, fraction, motion.SLOW, self._set_fraction, motion.EASY_EASE, key="bar")
+
+    def _set_fraction(self, value: float) -> None:
+        self._fraction = value
         self.update()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self._pending:
+            self._pending = False
+            self._morph(self._target)
 
     def paintEvent(self, _event):
         t = theme.current()
@@ -379,11 +474,13 @@ class AppRow(QFrame):
         tone: str = "accent",
         extra: str = "",
         marker: float | None = None,
+        animate_from: float | None = None,
         parent=None,
     ):
         super().__init__(parent)
         self.app_id = app["app_id"]
-        self.setProperty("row", True)
+        self.fraction = fraction
+        self._hover = 0.0
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setAccessibleName(f"{app.get('name', '')}, {value}")
@@ -415,7 +512,7 @@ class AppRow(QFrame):
         holder.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         lay.addWidget(holder, 3)
 
-        self.bar = UsageBar(fraction, tone, marker)
+        self.bar = UsageBar(fraction, tone, marker, animate_from)
         lay.addWidget(self.bar, 2)
 
         val = label(
@@ -449,13 +546,39 @@ class AppRow(QFrame):
     def contextMenuEvent(self, event):
         self.context_requested.emit(self.app_id, event.globalPos())
 
+    def enterEvent(self, event):
+        motion.tween(self, self._hover, 1.0, motion.FASTER, self._set_hover, motion.DECELERATE, key="hover")
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        motion.tween(self, self._hover, 0.0, motion.FAST, self._set_hover, motion.ACCELERATE, key="hover")
+        super().leaveEvent(event)
+
+    def _set_hover(self, value: float) -> None:
+        self._hover = value
+        self.update()
+
     def focusInEvent(self, event):
-        self.setStyleSheet(f"QFrame[row='true'] {{ background: {theme.current().hover}; }}")
+        self.update()
         super().focusInEvent(event)
 
     def focusOutEvent(self, event):
-        self.setStyleSheet("")
+        self.update()
         super().focusOutEvent(event)
+
+    def paintEvent(self, event):
+        t = theme.current()
+        strength = max(self._hover, 1.0 if self.hasFocus() else 0.0)
+        if strength > 0:
+            p = QPainter(self)
+            p.setRenderHint(QPainter.RenderHint.Antialiasing)
+            fill = QColor(t.hover)
+            fill.setAlphaF(strength)
+            p.setPen(QPen(QColor(t.accent), 1) if self.hasFocus() else Qt.PenStyle.NoPen)
+            p.setBrush(fill)
+            p.drawRoundedRect(QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5), 8, 8)
+            p.end()
+        super().paintEvent(event)
 
 
 class EmptyState(QWidget):
@@ -489,6 +612,9 @@ class SegmentedControl(QFrame):
         lay = QHBoxLayout(self)
         lay.setContentsMargins(3, 3, 3, 3)
         lay.setSpacing(2)
+        self._thumb = QFrame(self)
+        self._thumb.setObjectName("segThumb")
+        self._thumb.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self._group = QButtonGroup(self)
         self._group.setExclusive(True)
         for i, text in enumerate(options):
@@ -497,18 +623,50 @@ class SegmentedControl(QFrame):
             b.setCheckable(True)
             b.setCursor(Qt.CursorShape.PointingHandCursor)
             b.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+            b.installEventFilter(self)
             self._group.addButton(b, i)
             lay.addWidget(b)
         self._group.button(current).setChecked(True)
-        self._group.idClicked.connect(self.changed.emit)
+        self._group.idClicked.connect(self._on_clicked)
 
     def current(self) -> int:
         return self._group.checkedId()
 
     def set_current(self, index: int) -> None:
         btn = self._group.button(index)
-        if btn:
+        if btn and not btn.isChecked():
             btn.setChecked(True)
+            self._move_thumb(animate=self.isVisible())
+
+    def _on_clicked(self, index: int) -> None:
+        self._move_thumb(animate=True)
+        self.changed.emit(index)
+
+    def _move_thumb(self, animate: bool) -> None:
+        btn = self._group.checkedButton()
+        if btn is None:
+            return
+        target = QRectF(btn.geometry())
+        if animate:
+            start = QRectF(self._thumb.geometry())
+            motion.tween(
+                self,
+                start,
+                target,
+                motion.NORMAL,
+                lambda r: self._thumb.setGeometry(r.toRect()),
+                motion.EASY_EASE,
+                key="thumb",
+            )
+        else:
+            self._thumb.setGeometry(target.toRect())
+        self._thumb.lower()
+
+    def eventFilter(self, obj, event):
+        if event.type() in (QEvent.Type.Resize, QEvent.Type.Move) and obj is self._group.checkedButton():
+            if motion.running(self, "thumb") is None:
+                self._move_thumb(animate=False)
+        return super().eventFilter(obj, event)
 
 
 class Toggle(QAbstractButton):
@@ -521,9 +679,6 @@ class Toggle(QAbstractButton):
         self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
         self._knob = 1.0 if checked else 0.0
         super().setChecked(checked)
-        self._anim = QPropertyAnimation(self, b"knob", self)
-        self._anim.setDuration(140)
-        self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
         self.toggled.connect(self._animate)
 
     def sizeHint(self) -> QSize:
@@ -546,10 +701,9 @@ class Toggle(QAbstractButton):
     knob = Property(float, _get_knob, _set_knob)
 
     def _animate(self, checked: bool) -> None:
-        self._anim.stop()
-        self._anim.setStartValue(self._knob)
-        self._anim.setEndValue(1.0 if checked else 0.0)
-        self._anim.start()
+        motion.tween(
+            self, self._knob, 1.0 if checked else 0.0, motion.FAST, self._set_knob, motion.EASY_EASE, key="knob"
+        )
 
     def paintEvent(self, _event):
         t = theme.current()
@@ -616,9 +770,7 @@ class Toast(QFrame):
         self._action.clicked.connect(self._run_action)
         self._effect = QGraphicsOpacityEffect(self)
         self.setGraphicsEffect(self._effect)
-        self._fade = QPropertyAnimation(self._effect, b"opacity", self)
-        self._fade.setDuration(160)
-        self._fade.finished.connect(self._hide_if_faded)
+        self._rest_y = 0
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
         self._timer.timeout.connect(self.dismiss)
@@ -635,15 +787,23 @@ class Toast(QFrame):
         self._callback = callback
         self._action.setText(action)
         self._action.setVisible(bool(action and callback))
+        was_visible = self.isVisible() and self._effect.opacity() > 0.5
         self.adjustSize()
         self.reposition()
         self.raise_()
         self.show()
-        self._fade.stop()
-        self._fade.setStartValue(self._effect.opacity() if self.isVisible() else 0.0)
-        self._fade.setEndValue(1.0)
-        self._fade.start()
+        if was_visible:
+            self._animate(0, 0, 1.0, 1.0, 0, motion.LINEAR)  # cancel a dismissal in progress
+        else:
+            self._animate(12, 0, 0.0, 1.0, motion.GENTLE, motion.DECELERATE)
         self._timer.start(msec + (2500 if action else 0))
+
+    def _animate(self, dy0: float, dy1: float, op0: float, op1: float, duration: int, easing, on_done=None) -> None:
+        def step(t: float) -> None:
+            self.move(self.x(), int(self._rest_y + motion.lerp(dy0, dy1, t)))
+            self._effect.setOpacity(motion.lerp(op0, op1, t))
+
+        motion.tween(self, 0.0, 1.0, duration, step, easing, on_done, key="toast")
 
     def reposition(self) -> None:
         parent = self.parentWidget()
@@ -652,17 +812,12 @@ class Toast(QFrame):
         self.setMaximumWidth(min(560, parent.width() - 40))
         self.adjustSize()
         x = (parent.width() - self.width()) // 2
-        self.move(max(20, x), parent.height() - self.height() - 24)
+        self._rest_y = parent.height() - self.height() - 24
+        self.move(max(20, x), self._rest_y)
 
     def dismiss(self) -> None:
-        self._fade.stop()
-        self._fade.setStartValue(self._effect.opacity())
-        self._fade.setEndValue(0.0)
-        self._fade.start()
-
-    def _hide_if_faded(self) -> None:
-        if self._effect.opacity() < 0.05:
-            self.hide()
+        if self.isVisible():
+            self._animate(0, 8, self._effect.opacity(), 0.0, motion.FAST, motion.ACCELERATE, self.hide)
 
     def _run_action(self) -> None:
         callback, self._callback = self._callback, None

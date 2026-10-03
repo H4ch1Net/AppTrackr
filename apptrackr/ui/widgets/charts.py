@@ -10,7 +10,7 @@ from PySide6.QtCore import QPointF, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QSizePolicy, QToolTip, QWidget
 
-from .. import fmt, theme
+from .. import fmt, motion, theme
 
 
 def _font(widget: QWidget, px: int, bold: bool = False) -> QFont:
@@ -59,12 +59,48 @@ class BarChart(QWidget):
         self._hover: int | None = None
         self._limit: float | None = None
         self._empty_text = "No activity yet"
+        # Animation state: bars ease from _from to _to; _progress runs 0..1 over the series.
+        self._from: list[float] = []
+        self._to: list[float] = []
+        self._progress = 1.0
+        self._growing = False
+        self._pending = False
         self.setMinimumHeight(height)
         self.setMouseTracking(True)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
     def sizeHint(self) -> QSize:
         return QSize(400, self.minimumHeight())
+
+    # Motion ------------------------------------------------------------------
+
+    def _stagger(self) -> float:
+        return min(18.0, 320.0 / max(1, len(self._to)))
+
+    def _total_ms(self) -> int:
+        return int(motion.SLOWER + self._stagger() * max(0, len(self._to) - 1))
+
+    def _shown(self, i: int) -> float:
+        if self._progress >= 1.0 or i >= len(self._from):
+            return self._to[i] if i < len(self._to) else 0.0
+        local = (self._progress * self._total_ms() - i * self._stagger()) / motion.SLOWER
+        local = min(1.0, max(0.0, local))
+        curve = motion.DECELERATE if self._growing else motion.EASY_EASE
+        return motion.lerp(self._from[i], self._to[i], curve.valueForProgress(local))
+
+    def _set_progress(self, value: float) -> None:
+        self._progress = value
+        self.update()
+
+    def _start(self) -> None:
+        self._progress = 0.0
+        motion.tween(self, 0.0, 1.0, self._total_ms(), self._set_progress, motion.LINEAR, key="bars")
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self._pending:
+            self._pending = False
+            self._start()
 
     def set_data(
         self,
@@ -73,10 +109,22 @@ class BarChart(QWidget):
         limit: float | None = None,
         empty_text: str = "No activity yet",
     ) -> None:
+        target = [float(b.value) for b in bars]
+        current = [self._shown(i) for i in range(len(self._to))]
+        self._growing = len(current) != len(target) or not any(current)
+        self._from = [0.0] * len(target) if self._growing else current
+        self._to = target
         self._bars = bars
         self._highlight = highlight
         self._limit = limit
         self._empty_text = empty_text
+        if all(abs(a - b) < 1 for a, b in zip(self._from, self._to, strict=True)):
+            self._progress = 1.0
+        elif self.isVisible():
+            self._start()
+        else:
+            self._progress = 0.0
+            self._pending = True
         self.update()
 
     def _geometry(self):
@@ -146,7 +194,7 @@ class BarChart(QWidget):
         accent = QColor(t.accent)
         for i, bar in enumerate(self._bars):
             x = plot.left() + slot * i + (slot - bar_w) / 2
-            h = plot.height() * bar.value / top_value
+            h = plot.height() * self._shown(i) / top_value
             color = QColor(accent)
             if self._highlight is not None and i != self._highlight:
                 color.setAlphaF(0.55)
@@ -184,6 +232,8 @@ class MonthHeatmap(QWidget):
         self._totals: dict[str, int] = {}
         self._selected: date | None = date.today()
         self._hover: date | None = None
+        self._wave = 1.0  # 0..1 entrance progress after a month change
+        self._ring: QRectF | None = None  # animated selection ring while gliding
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setMinimumSize(320, 260)
@@ -192,13 +242,53 @@ class MonthHeatmap(QWidget):
         self.setSizePolicy(policy)
         self.setAccessibleName("Usage calendar")
 
+    WAVE_STEP = 9  # ms between consecutive days
+
     def set_month(self, month: date, totals: dict[str, int]) -> None:
+        changed = month.replace(day=1) != self._month
         self._month = month.replace(day=1)
         self._totals = totals
+        if changed and self.isVisible():
+            days = calendar.monthrange(self._month.year, self._month.month)[1]
+            motion.tween(
+                self, 0.0, 1.0, motion.NORMAL + self.WAVE_STEP * days, self._set_wave, motion.LINEAR, key="wave"
+            )
         self.update()
 
+    def _set_wave(self, value: float) -> None:
+        self._wave = value
+        self.update()
+
+    def _cell_wave(self, day: int) -> float:
+        """Entrance progress (0..1) for one cell during the month-change wave."""
+        if self._wave >= 1.0:
+            return 1.0
+        days = calendar.monthrange(self._month.year, self._month.month)[1]
+        elapsed = self._wave * (motion.NORMAL + self.WAVE_STEP * days) - (day - 1) * self.WAVE_STEP
+        return motion.DECELERATE.valueForProgress(min(1.0, max(0.0, elapsed / motion.NORMAL)))
+
     def set_selected(self, day: date | None) -> None:
+        self._glide_to(day)
+
+    def _glide_to(self, day: date | None) -> None:
+        old = self._selected
         self._selected = day
+        same_month = day and old and day.replace(day=1) == old.replace(day=1) == self._month
+        if same_month and day != old and self.isVisible():
+            start, end = self._ring or self._cell_rect(old), self._cell_rect(day)
+            motion.tween(
+                self, start, end, motion.NORMAL, self._set_ring, motion.EASY_EASE, on_done=self._end_ring, key="ring"
+            )
+        else:
+            self._ring = None
+        self.update()
+
+    def _set_ring(self, rect: QRectF) -> None:
+        self._ring = QRectF(rect)
+        self.update()
+
+    def _end_ring(self) -> None:
+        self._ring = None
         self.update()
 
     def _weeks(self) -> int:
@@ -255,8 +345,7 @@ class MonthHeatmap(QWidget):
     def mouseReleaseEvent(self, event):
         d = self._day_at(event.position())
         if d and d <= date.today():
-            self._selected = d
-            self.update()
+            self._glide_to(d)
             self.day_selected.emit(d.isoformat())
 
     def keyPressEvent(self, event):
@@ -265,10 +354,10 @@ class MonthHeatmap(QWidget):
             base = self._selected or date.today()
             new = base + timedelta(days=steps[event.key()])
             if new <= date.today():
-                self._selected = new
-                if new.replace(day=1) != self._month:
-                    self._month = new.replace(day=1)
-                self.update()
+                if new.replace(day=1) == self._month:
+                    self._glide_to(new)
+                else:
+                    self._selected = new
                 self.day_selected.emit(new.isoformat())
             return
         super().keyPressEvent(event)
@@ -294,6 +383,13 @@ class MonthHeatmap(QWidget):
         for n in range(1, days + 1):
             d = self._month.replace(day=n)
             r = self._cell_rect(d)
+            enter = self._cell_wave(n)
+            if enter <= 0.0:
+                continue
+            p.setOpacity(enter)
+            if enter < 1.0:
+                shrink = (1 - enter) * 0.08
+                r = r.adjusted(r.width() * shrink, r.height() * shrink, -r.width() * shrink, -r.height() * shrink)
             ms = self._totals.get(d.isoformat(), 0)
             future = d > today
             if ms > 0:
@@ -313,10 +409,6 @@ class MonthHeatmap(QWidget):
                 p.setPen(QPen(QColor(t.text), 1.5))
                 p.setBrush(Qt.BrushStyle.NoBrush)
                 p.drawRoundedRect(r.adjusted(1, 1, -1, -1), 7, 7)
-            if d == self._selected:
-                p.setPen(QPen(QColor(t.accent if not self.hasFocus() else t.text), 2.5))
-                p.setBrush(Qt.BrushStyle.NoBrush)
-                p.drawRoundedRect(r.adjusted(1.5, 1.5, -1.5, -1.5), 7, 7)
 
             strong = ms > 0 and ms / peak > 0.55
             text_color = QColor(t.on_accent) if strong else QColor(t.text_muted if future else t.text)
@@ -333,6 +425,15 @@ class MonthHeatmap(QWidget):
                     )
             else:
                 p.drawText(r, Qt.AlignmentFlag.AlignCenter, str(n))
+        p.setOpacity(1.0)
+
+        ring = self._ring
+        if ring is None and self._selected and self._selected.replace(day=1) == self._month:
+            ring = self._cell_rect(self._selected)
+        if ring is not None:
+            p.setPen(QPen(QColor(t.accent if not self.hasFocus() else t.text), 2.5))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawRoundedRect(ring.adjusted(1.5, 1.5, -1.5, -1.5), 7, 7)
         p.end()
 
 
@@ -342,12 +443,41 @@ class ShareBar(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._segments: list[tuple[str, float, str]] = []
+        self._from: dict[str, float] = {}
+        self._to: dict[str, float] = {}
+        self._t = 1.0
+        self._pending = False
         self.setFixedHeight(12)
         self.setMouseTracking(True)
 
     def set_segments(self, segments: list[tuple[str, float, str]]) -> None:
+        self._from = {name: self._share(name) for name in self._to}
         self._segments = [s for s in segments if s[1] > 0]
+        total = sum(v for _, v, _ in self._segments) or 1
+        self._to = {name: v / total for name, v, _ in self._segments}
+        if self._from == self._to:
+            return
+        if self.isVisible():
+            self._start()
+        else:
+            self._t, self._pending = 0.0, True
         self.update()
+
+    def _share(self, name: str) -> float:
+        return motion.lerp(self._from.get(name, 0.0), self._to.get(name, 0.0), self._t)
+
+    def _start(self) -> None:
+        motion.tween(self, 0.0, 1.0, motion.SLOWER, self._set_t, motion.EASY_EASE, key="share")
+
+    def _set_t(self, value: float) -> None:
+        self._t = value
+        self.update()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self._pending:
+            self._pending = False
+            self._start()
 
     def _segment_at(self, x: float):
         total = sum(v for _, v, _ in self._segments) or 1
@@ -372,16 +502,19 @@ class ShareBar(QWidget):
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QColor(t.track))
         p.drawRoundedRect(QRectF(0, 0, self.width(), h), h / 2, h / 2)
-        total = sum(v for _, v, _ in self._segments)
-        if not total:
+        if not self._segments:
             return
         clip = QPainterPath()
         clip.addRoundedRect(QRectF(0, 0, self.width(), h), h / 2, h / 2)
         p.setClipPath(clip)
         x = 0.0
-        for _name, value, color in self._segments:
-            w = self.width() * value / total
-            p.setBrush(QColor(color))
+        names = [n for n, _, _ in self._segments] + [n for n in self._from if n not in self._to]
+        colors = {n: c for n, _, c in self._segments}
+        for name in names:
+            w = self.width() * self._share(name)
+            if w <= 0:
+                continue
+            p.setBrush(QColor(colors.get(name, theme.current().text_muted)))
             p.drawRect(QRectF(x, 0, w + 0.5, h))
             x += w
         p.end()

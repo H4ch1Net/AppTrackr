@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QProgressDialog,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -27,7 +28,7 @@ from ...core import autostart
 from ...data import db, export, queries
 from ...updater import apply as updater_apply
 from ...updater import check as updater
-from .. import fmt, theme
+from .. import fmt, motion, theme
 from ..signals import bus, run_async
 from ..widgets.components import (
     Card,
@@ -197,9 +198,8 @@ class SettingsView(Page):
                 "Excluded apps are not tracked and are hidden everywhere. Right-click any app to exclude it.",
             )
         )
-        self.excluded = QGridLayout()
-        self.excluded.setHorizontalSpacing(10)
-        self.excluded.setVerticalSpacing(4)
+        self.excluded = QVBoxLayout()
+        self.excluded.setSpacing(4)
         card.body.addLayout(self.excluded)
         self.add(card)
 
@@ -222,6 +222,16 @@ class SettingsView(Page):
             sw.clicked.connect(lambda _=False, n=name: self._set_accent(n))
             lay.addWidget(sw)
         card.body.addWidget(SettingRow("Accent color", "", swatches))
+        card.body.addWidget(divider())
+        self.animations = Toggle()
+        self.animations.toggled.connect(self._set_animations)
+        card.body.addWidget(
+            SettingRow(
+                "Animations",
+                "Transitions, counters and chart motion. Follows Windows' Animation effects setting until changed.",
+                self.animations,
+            )
+        )
         self.add(card)
 
     def _build_data(self) -> None:
@@ -320,6 +330,7 @@ class SettingsView(Page):
         self.idle.setCurrentIndex(idx)
         self.idle.blockSignals(False)
 
+        self.animations.set_silently(motion.enabled())
         self.mode.set_current(theme.MODES.index(theme.mode()))
         self.swatches[theme.accent_name()].setChecked(True)
         self.db_path.setText(f"Database: {db.db_path()}")
@@ -335,13 +346,17 @@ class SettingsView(Page):
         clear_layout(self.excluded)
         hidden = queries.hidden_apps()
         if not hidden:
-            self.excluded.addWidget(label("No excluded apps.", "muted"), 0, 0)
+            self.excluded.addWidget(label("No excluded apps.", "muted"))
             return
-        for i, app in enumerate(hidden):
-            self.excluded.addWidget(label(app["name"]), i, 0)
-            self.excluded.addWidget(label(app["exe_name"], "caption"), i, 1)
-            self.excluded.addWidget(button("Track again", kind="ghost", on_click=lambda a=app: self._include(a)), i, 2)
-        self.excluded.setColumnStretch(1, 1)
+        for app in hidden:
+            row = QWidget()
+            lay = QHBoxLayout(row)
+            lay.setContentsMargins(0, 0, 0, 0)
+            lay.setSpacing(10)
+            lay.addWidget(label(app["name"]))
+            lay.addWidget(label(app["exe_name"], "caption"), 1)
+            lay.addWidget(button("Track again", kind="ghost", on_click=lambda a=app, r=row: self._include(a, r)))
+            self.excluded.addWidget(row)
 
     # ------------------------------------------------------------------
     # Handlers
@@ -375,6 +390,10 @@ class SettingsView(Page):
             self.ctx.clicks.set_enabled(on)
         self.ctx.toast("Click counting on" if on else "Click counting off")
 
+    def _set_animations(self, on: bool) -> None:
+        motion.set_enabled(on)
+        self.ctx.toast("Animations on" if on else "Animations off")
+
     def _set_mode(self, index: int) -> None:
         db.set_setting("ui_mode", theme.MODES[index])
         self.ctx.window.apply_theme()
@@ -383,11 +402,11 @@ class SettingsView(Page):
         db.set_setting("ui_theme", name)
         self.ctx.window.apply_theme()
 
-    def _include(self, app: dict) -> None:
+    def _include(self, app: dict, row: QWidget) -> None:
         queries.set_hidden(app["app_id"], False)
         self.ctx.tracker.reload_settings()
         bus.data_changed.emit()
-        self._fill_excluded()
+        motion.collapse(row, self._fill_excluded)
         self.ctx.toast(f"{app['name']} is tracked again")
 
     # Data ----------------------------------------------------------------

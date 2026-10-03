@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
 from ...data import catalog, queries
 from ...rewards import engine as rewards
 from ...rewards import rules
-from .. import fmt
+from .. import fmt, motion
 from ..signals import bus
 from ..widgets.charts import Bar, BarChart
 from ..widgets.components import (
@@ -159,11 +159,14 @@ class AppDetailView(Page):
     # ------------------------------------------------------------------
 
     def load_app(self, app_id: int) -> None:
+        if app_id != self.app_id:
+            for tile in (self.t_today, self.t_week, self.t_month, self.t_avg):
+                tile.reset()
         self.app_id = app_id
         self.verticalScrollBar().setValue(0)
-        self.reload()
+        self.reload(animate=True)
 
-    def reload(self) -> None:
+    def reload(self, animate: bool = False) -> None:
         if self.app_id is None:
             return
         app = queries.get_app(self.app_id)
@@ -199,8 +202,9 @@ class AppDetailView(Page):
         limit_ms = app.get("daily_limit_ms")
         today_ms = history[-1]["focused_ms"]
 
-        self.t_today.set(
-            fmt.duration(today_ms, short=True),
+        self.t_today.set_number(
+            today_ms,
+            _short,
             (
                 f"of {fmt.duration(limit_ms, short=True)} limit"
                 if limit_ms
@@ -208,14 +212,11 @@ class AppDetailView(Page):
             ),
             "danger" if limit_ms and today_ms >= limit_ms else "caption",
         )
-        self.t_week.set(
-            fmt.duration(sum(h["focused_ms"] for h in week), short=True),
-            f"{sum(h['opens_count'] for h in week)} launches",
+        self.t_week.set_number(
+            sum(h["focused_ms"] for h in week), _short, f"{sum(h['opens_count'] for h in week)} launches"
         )
-        self.t_month.set(fmt.duration(total_30, short=True), f"{len(active)} active days")
-        self.t_avg.set(
-            fmt.duration(total_30 / len(active), short=True) if active else "0s", "per active day, last 30 days"
-        )
+        self.t_month.set_number(total_30, _short, f"{len(active)} active days")
+        self.t_avg.set_number(total_30 / len(active) if active else 0, _short, "per active day, last 30 days")
 
         self.chart.set_data(
             [
@@ -237,7 +238,7 @@ class AppDetailView(Page):
         )
 
         self._fill_facts(app)
-        self._fill_sessions()
+        self._fill_sessions(animate)
 
     def _fill_facts(self, app: dict) -> None:
         clear_layout(self.facts_grid)
@@ -257,8 +258,9 @@ class AppDetailView(Page):
             self.facts_grid.addWidget(val, row, 1)
         self.facts_grid.setColumnStretch(1, 1)
 
-    def _fill_sessions(self) -> None:
+    def _fill_sessions(self, animate: bool = False) -> None:
         clear_layout(self.sessions)
+        added: list[QWidget] = []
         sessions = queries.recent_sessions(self.app_id, limit=12)
         if not sessions:
             self.sessions.addWidget(EmptyState("clock", "No sessions yet"))
@@ -273,6 +275,7 @@ class AppDetailView(Page):
                 )
                 heading.setContentsMargins(0, 10 if last_day else 0, 0, 4)
                 self.sessions.addWidget(heading)
+                added.append(heading)
                 last_day = day
             row = QWidget()
             lay = QHBoxLayout(row)
@@ -287,6 +290,9 @@ class AppDetailView(Page):
             dur.setStyleSheet("font-weight: 600;")
             lay.addWidget(dur)
             self.sessions.addWidget(row)
+            added.append(row)
+        if animate:
+            motion.stagger_in(added, step=16, limit=16)
 
     def _update_reward_hint(self) -> None:
         if not self.rewards_toggle.isChecked():
@@ -360,3 +366,7 @@ class AppDetailView(Page):
         queries.set_display_name(self.app_id, name or catalog.friendly_name(app["exe_name"]))
         bus.data_changed.emit()
         self.reload()
+
+
+def _short(ms: float) -> str:
+    return fmt.duration(ms, short=True)

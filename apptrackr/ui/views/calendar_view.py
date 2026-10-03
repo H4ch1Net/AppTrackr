@@ -9,10 +9,10 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout
 
 from ...data import queries
-from .. import fmt
+from .. import fmt, motion
 from ..signals import bus
 from ..widgets.charts import Bar, BarChart, MonthHeatmap
-from ..widgets.components import AppRow, Card, EmptyState, Page, PageHeader, button, clear_layout, label
+from ..widgets.components import AppRow, Card, EmptyState, Page, PageHeader, button, clear_layout, count_to, label
 
 
 class CalendarView(Page):
@@ -22,6 +22,8 @@ class CalendarView(Page):
         self.ctx = ctx
         self._month = date.today().replace(day=1)
         self._selected = date.today()
+        self._day_total = 0
+        self._fractions: dict[int, float] = {}
 
         self.header = PageHeader("Calendar")
         self.prev_btn = button(
@@ -92,7 +94,7 @@ class CalendarView(Page):
         self._selected = date.fromisoformat(day)
         self._month = self._selected.replace(day=1)
 
-    def refresh(self) -> None:
+    def refresh(self, animate: bool = False) -> None:
         first = self._month
         last = first.replace(day=calendar.monthrange(first.year, first.month)[1])
         totals = queries.daily_totals(first.isoformat(), last.isoformat())
@@ -120,9 +122,9 @@ class CalendarView(Page):
         self.header.set_subtitle(
             f"{fmt.duration(total, short=True)} tracked in {first:%B}" if total else f"Nothing tracked in {first:%B}"
         )
-        self._show_day()
+        self._show_day(animate)
 
-    def _show_day(self) -> None:
+    def _show_day(self, animate: bool = False) -> None:
         day = self._selected
         key = day.isoformat()
         apps = queries.top_apps(key, key, limit=None)
@@ -134,7 +136,11 @@ class CalendarView(Page):
         total = sum(a["focused_ms"] for a in apps)
         self.day_title.setText(fmt.long_date(day))
         self.day_sub.setText(fmt.relative_day(day) if (date.today() - day).days < 7 else f"{day:%Y}")
-        self.day_total.setText(fmt.duration(total, short=True) if total else "")
+        if animate and total and self._day_total:
+            count_to(self.day_total, self._day_total, total, _short)
+        else:
+            self.day_total.setText(fmt.duration(total, short=True) if total else "")
+        self._day_total = total
 
         hours = queries.hourly_totals(key)
         self.day_hours.set_data(
@@ -152,6 +158,7 @@ class CalendarView(Page):
             self.day_list.addWidget(EmptyState("calendar-days", "No activity", "Nothing was tracked on this day."))
             return
         peak = apps[0]["focused_ms"] or 1
+        rows = []
         for app in apps[:12]:
             row = AppRow(
                 app,
@@ -159,10 +166,15 @@ class CalendarView(Page):
                 app["focused_ms"] / peak,
                 sub=app.get("category") or "",
                 extra=f"{app['focused_ms'] / (total or 1):.0%}",
+                animate_from=self._fractions.get(app["app_id"], 0.0),
             )
             row.clicked.connect(self.ctx.open_app)
             row.context_requested.connect(self.ctx.app_menu)
             self.day_list.addWidget(row)
+            rows.append(row)
+        self._fractions = {row.app_id: row.fraction for row in rows}
+        if animate:
+            motion.stagger_in(rows)
         if len(apps) > 12:
             self.day_list.addWidget(label(f"and {len(apps) - 12} more", "caption"))
 
@@ -170,10 +182,10 @@ class CalendarView(Page):
         self._selected = date.fromisoformat(day)
         if self._selected.replace(day=1) != self._month:
             self._month = self._selected.replace(day=1)
-            self.refresh()
+            self.refresh(animate=True)
         else:
             self.today_btn.setEnabled(self._selected != date.today())
-            self._show_day()
+            self._show_day(animate=True)
 
     def _shift(self, months: int) -> None:
         y, m = self._month.year, self._month.month + months
@@ -184,12 +196,12 @@ class CalendarView(Page):
         self._month = target
         last = calendar.monthrange(y, m)[1]
         self._selected = min(date.today(), target.replace(day=min(self._selected.day, last)))
-        self.refresh()
+        self.refresh(animate=True)
 
     def _go_today(self) -> None:
         self._selected = date.today()
         self._month = self._selected.replace(day=1)
-        self.refresh()
+        self.refresh(animate=True)
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_PageUp:
@@ -198,3 +210,7 @@ class CalendarView(Page):
             self._shift(1)
         else:
             super().keyPressEvent(event)
+
+
+def _short(ms: float) -> str:
+    return fmt.duration(ms, short=True)

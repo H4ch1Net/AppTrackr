@@ -6,7 +6,7 @@ from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLineEdit, QPushButton, QVBoxLayout
 
 from ...data import db, queries
-from .. import fmt, icons
+from .. import fmt, icons, motion
 from ..signals import bus
 from ..widgets.components import (
     AppRow,
@@ -36,6 +36,7 @@ class AppsView(Page):
         super().__init__(parent)
         self.setObjectName("page")
         self.ctx = ctx
+        self._fractions: dict[int, float] = {}
 
         self.header = PageHeader("Apps")
         self.add(self.header)
@@ -53,7 +54,7 @@ class AppsView(Page):
         self._debounce = QTimer(self)
         self._debounce.setSingleShot(True)
         self._debounce.setInterval(150)
-        self._debounce.timeout.connect(self.refresh)
+        self._debounce.timeout.connect(self._user_refresh)
         self.search.textChanged.connect(lambda *_: self._debounce.start())
         bar.addWidget(self.search, 1)
 
@@ -62,7 +63,7 @@ class AppsView(Page):
         for text, _ in PERIODS:
             self.period.addItem(text)
         self.period.setCurrentIndex(1)
-        self.period.currentIndexChanged.connect(lambda *_: self.refresh())
+        self.period.currentIndexChanged.connect(self._user_refresh)
         bar.addWidget(self.period)
 
         self.category = QComboBox()
@@ -70,7 +71,7 @@ class AppsView(Page):
         self.category.addItem("All categories", None)
         for cat in queries.CATEGORIES:
             self.category.addItem(cat, cat)
-        self.category.currentIndexChanged.connect(lambda *_: self.refresh())
+        self.category.currentIndexChanged.connect(self._user_refresh)
         bar.addWidget(self.category)
 
         self.favorites = QPushButton("Favorites")
@@ -78,12 +79,12 @@ class AppsView(Page):
         self.favorites.setProperty("kind", "ghost")
         self.favorites.setToolTip("Show only favorite apps")
         IconBinding.attach(self.favorites, "star", "text_dim", checked_tone="gold")
-        self.favorites.toggled.connect(lambda *_: self.refresh())
+        self.favorites.toggled.connect(self._user_refresh)
         bar.addWidget(self.favorites)
         self.add(bar)
 
         self.sort = SegmentedControl([s[0] for s in SORTS])
-        self.sort.changed.connect(lambda *_: self.refresh())
+        self.sort.changed.connect(self._user_refresh)
         sort_row = QHBoxLayout()
         sort_row.addWidget(self.sort)
         sort_row.addStretch(1)
@@ -110,7 +111,11 @@ class AppsView(Page):
     def set_period(self, index: int) -> None:
         self.period.setCurrentIndex(index)
 
-    def refresh(self) -> None:
+    def _user_refresh(self, *_args) -> None:
+        self.refresh(animate=True)
+
+    def refresh(self, animate: bool = False) -> None:
+        """Rebuild the list. *animate* staggers rows in after a user-driven change."""
         _label, days = PERIODS[self.period.currentIndex()]
         end = queries.today_str()
         start = queries.days_ago(days) if days is not None else "0000-01-01"
@@ -139,8 +144,12 @@ class AppsView(Page):
         else:
             metric = {queries.SORT_OPENS: "opens_count", queries.SORT_CLICKS: "clicks_count"}.get(sort, "focused_ms")
             peak = max(a[metric] for a in apps) or 1
-            for app in apps:
-                self.list.addWidget(self._row(app, sort, metric, peak, total_ms))
+            rows = [self._row(app, sort, metric, peak, total_ms) for app in apps]
+            for row in rows:
+                self.list.addWidget(row)
+            self._fractions = {row.app_id: row.fraction for row in rows}
+            if animate:
+                motion.stagger_in(rows)
 
         hidden = len(queries.hidden_apps())
         self.hidden_note.setText(f"{hidden} excluded app{'s are' if hidden != 1 else ' is'} hidden. Manage in Settings")
@@ -172,11 +181,10 @@ class AppsView(Page):
         row = AppRow(
             app,
             value,
-            app[metric] / peak
-            if sort != queries.SORT_LEAST
-            else app["focused_ms"] / max(1, max(peak, app["focused_ms"])),
+            app[metric] / peak,
             sub=sub,
             extra=extra,
+            animate_from=self._fractions.get(app["app_id"], 0.0),
         )
         row.clicked.connect(self.ctx.open_app)
         row.context_requested.connect(self.ctx.app_menu)
