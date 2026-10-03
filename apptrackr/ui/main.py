@@ -108,6 +108,7 @@ class MainWindow(QMainWindow):
 
         self.apply_rewards_visibility()
         self.show_page("dashboard")
+        self._refresh_status()
         QTimer.singleShot(1500, self._slow_tick)
         QTimer.singleShot(10_000, self._startup_update_check)
 
