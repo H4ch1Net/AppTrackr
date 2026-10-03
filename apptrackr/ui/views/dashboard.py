@@ -5,27 +5,32 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 
 from PySide6.QtCore import QSize
-from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QMenu, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QMenu, QVBoxLayout, QWidget
 
 from ...core import tracker as trk
 from ...data import db, queries
 from ...game import economy
 from ...rewards import engine as rewards
-from .. import fmt, icons, motion, theme
+from .. import fmt, fonts, icons, motion, theme
 from ..signals import bus
-from ..widgets.charts import Bar, BarChart, ShareBar, category_color
+from ..widgets.charts import Bar, BarChart, SessionDial, ShareBar
 from ..widgets.components import (
     AppAvatar,
     AppRow,
     Card,
     EmptyState,
+    FlowLayout,
+    MetricGrid,
     Page,
     PageHeader,
     StatTile,
     button,
     clear_layout,
+    divider,
+    eyebrow,
     icon_label,
     label,
+    legend_item,
     set_role,
     tone_color,
 )
@@ -34,13 +39,13 @@ TOP_APPS = 7
 
 
 class NowCard(Card):
-    """Live session: current app, session timer and pause controls."""
+    """Live session: chronograph dial, current app and pause controls."""
 
     def __init__(self, ctx, parent=None):
-        super().__init__(parent=parent, padding=20, spacing=10)
+        super().__init__(parent=parent, padding=18, spacing=12)
         self.ctx = ctx
         head = QHBoxLayout()
-        head.addWidget(label("NOW", "section"))
+        head.addWidget(eyebrow("Now", 1))
         head.addStretch(1)
         self.pulse = motion.PulseDot(5)
         head.addWidget(self.pulse)
@@ -48,34 +53,46 @@ class NowCard(Card):
         head.addWidget(self.state)
         self.body.addLayout(head)
 
-        self.identity = QWidget()
-        row = QHBoxLayout(self.identity)
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(12)
-        self.avatar = AppAvatar("", None, 40)
-        row.addWidget(self.avatar)
-        self.state_icon = icon_label("pause", "warning", 28)
-        row.addWidget(self.state_icon)
-        names = QVBoxLayout()
-        names.setSpacing(0)
-        self.name = label("", "heading")
-        self.name.setStyleSheet("font-size: 18px;")
-        names.addWidget(self.name)
-        self.detail = label("", "caption", wrap=True)
-        names.addWidget(self.detail)
-        row.addLayout(names, 1)
-        self.body.addWidget(self.identity)
+        row = QHBoxLayout()
+        row.setSpacing(18)
+        self.dial = SessionDial(150)
+        row.addWidget(self.dial)
 
-        self.timer = label("", "hero")
-        self.body.addWidget(self.timer)
-        self.body.addStretch(1)
+        self.identity = QWidget()
+        col = QVBoxLayout(self.identity)
+        col.setContentsMargins(0, 4, 0, 0)
+        col.setSpacing(4)
+        top = QHBoxLayout()
+        top.setSpacing(10)
+        self.avatar = AppAvatar("", None, 32)
+        top.addWidget(self.avatar)
+        self.state_icon = icon_label("pause", "warning", 22)
+        top.addWidget(self.state_icon)
+        self.name = label("", "heading")
+        self.name.setFont(fonts.sans(19, 600))
+        top.addWidget(self.name, 1)
+        col.addLayout(top)
+        self.detail = label("", "caption", wrap=True)
+        col.addWidget(self.detail)
+        col.addSpacing(6)
+        col.addWidget(divider())
+        col.addSpacing(4)
+        facts = QHBoxLayout()
+        facts.setSpacing(18)
+        self.fact_started = self._fact("Started")
+        self.fact_today = self._fact("Today in app")
+        facts.addLayout(self.fact_started[0])
+        facts.addLayout(self.fact_today[0])
+        facts.addStretch(1)
+        col.addLayout(facts)
+        col.addStretch(1)
 
         actions = QHBoxLayout()
         actions.setSpacing(6)
         self.pause_btn = button("Pause", kind="primary", on_click=ctx.window.toggle_pause)
-        self.pause_btn.setIconSize(QSize(16, 16))
+        self.pause_btn.setIconSize(QSize(14, 14))
         actions.addWidget(self.pause_btn)
-        self.later_btn = button("", kind="ghost", icon="timer", tooltip="Pause for a while")
+        self.later_btn = button("Pause for…", icon="timer", tooltip="Pause for a while")
         menu = QMenu(self.later_btn)
         for text, minutes in (("15 minutes", 15), ("30 minutes", 30), ("1 hour", 60), ("2 hours", 120)):
             menu.addAction(f"Pause for {text}", lambda m=minutes: ctx.window.pause_for(m))
@@ -84,9 +101,21 @@ class NowCard(Card):
         )
         actions.addWidget(self.later_btn)
         actions.addStretch(1)
-        self.body.addLayout(actions)
+        col.addLayout(actions)
+        row.addWidget(self.identity, 1)
+        self.body.addLayout(row)
         self._last_app: int | None = None
         self._last_key: tuple | None = None
+
+    @staticmethod
+    def _fact(caption: str):
+        box = QVBoxLayout()
+        box.setSpacing(2)
+        box.addWidget(eyebrow(caption))
+        value = label("–")
+        value.setFont(fonts.sans(14, 600, tabular=True))
+        box.addWidget(value)
+        return box, value
 
     def update_from(self, snap: trk.Snapshot) -> None:
         tracking = snap.status == trk.STATUS_TRACKING and snap.app_id is not None
@@ -98,10 +127,9 @@ class NowCard(Card):
         self.pulse.setVisible(tracking)
         self.avatar.setVisible(tracking)
         self.state_icon.setVisible(not tracking)
-        self.timer.setVisible(tracking)
         paused = snap.status == trk.STATUS_PAUSED
         self.pause_btn.setText("Resume" if paused else "Pause")
-        self.pause_btn.setIcon(icons.icon("play" if paused else "pause", tone_color("text_on")))
+        self.pause_btn.setIcon(icons.icon("play" if paused else "pause", tone_color("text_on"), 14))
         self.pause_btn.setEnabled(self.ctx.tracker.supported)
         self.later_btn.setVisible(self.ctx.tracker.supported and not paused)
 
@@ -112,13 +140,13 @@ class NowCard(Card):
                 self._last_app = snap.app_id
             self.name.setText(app["name"])
             today = queries.app_usage_on(queries.today_str(), snap.app_id) + snap.uncommitted_ms
-            parts = [f"{fmt.duration(today, short=True)} today"]
+            parts = [app.get("category") or "Uncategorized"]
             if app.get("daily_limit_ms"):
                 parts.append(f"limit {fmt.duration(app['daily_limit_ms'], short=True)}")
-            if app.get("category"):
-                parts.insert(0, app["category"])
             self.detail.setText(" · ".join(parts))
-            self.timer.setText(fmt.clock(snap.session_ms))
+            self.fact_started[1].setText(fmt.time_of_day(snap.session_start))
+            self.fact_today[1].setText(fmt.duration(today, short=True))
+            self.dial.set_state(True, snap.session_ms, "Session")
             self._set_state("Live", "pillAccent")
             return
 
@@ -136,9 +164,12 @@ class NowCard(Card):
         }.get(snap.status, ("activity", "Waiting for an app", "Switch to any app to start tracking.", "Ready"))
         if paused and snap.paused_until:
             detail = f"Resumes automatically at {fmt.time_of_day(snap.paused_until)}."
-        self.state_icon.setPixmap(icons.pixmap(icon, tone_color("warning" if paused else "text_muted"), 28))
+        self.state_icon.setPixmap(icons.pixmap(icon, tone_color("warning" if paused else "text_muted"), 22))
         self.name.setText(title)
         self.detail.setText(detail)
+        self.fact_started[1].setText("–")
+        self.fact_today[1].setText("–")
+        self.dial.set_state(False, 0, pill)
         self._set_state(pill, "pill")
 
     @staticmethod
@@ -147,9 +178,9 @@ class NowCard(Card):
         return f"No input for {minutes} min. Tracking resumes when you're back."
 
     def _set_state(self, text: str, role: str) -> None:
-        self.state.setText(text)
         if self.state.property("role") != role:
             set_role(self.state, role)
+        self.state.setText(text)
 
 
 class DashboardView(Page):
@@ -162,60 +193,53 @@ class DashboardView(Page):
         self._day_keys: list[str] = []
         self._fractions: dict[int, float] = {}
 
-        self.header = PageHeader("Dashboard", fmt.long_date(date.today()))
+        self.header = PageHeader("Dashboard", "", kicker=_kicker_date())
         self.add(self.header)
 
-        top = QHBoxLayout()
-        top.setSpacing(14)
+        top = self.stack_when_narrow(QHBoxLayout())
+        top.setSpacing(16)
         self.now = NowCard(ctx)
-        self.now.setMinimumWidth(320)
-        top.addWidget(self.now, 5)
-        tiles = QGridLayout()
-        tiles.setSpacing(14)
-        self.t_today = StatTile("Today", "clock")
-        self.t_week = StatTile("This week", "calendar-days")
-        self.t_apps = StatTile("Apps used today", "layout-grid")
-        self.t_streak = StatTile("Streak", "flame", tone="gold")
-        tiles.addWidget(self.t_today, 0, 0)
-        tiles.addWidget(self.t_week, 0, 1)
-        tiles.addWidget(self.t_apps, 1, 0)
-        tiles.addWidget(self.t_streak, 1, 1)
-        top.addLayout(tiles, 7)
+        self.now.setMinimumWidth(380)
+        top.addWidget(self.now, 6)
+        self.t_today = StatTile("Today", framed=False)
+        self.t_week = StatTile("This week", framed=False)
+        self.t_apps = StatTile("Apps used today", framed=False)
+        self.t_streak = StatTile("Streak", framed=False)
+        self.metrics = MetricGrid([self.t_today, self.t_week, self.t_apps, self.t_streak])
+        top.addWidget(self.metrics, 5)
         self.add(top)
 
-        grid = QGridLayout()
-        grid.setSpacing(14)
-        self.hourly_card = Card("Today by hour", "Focused time in each hour")
+        cols = self.stack_when_narrow(QHBoxLayout())
+        cols.setSpacing(16)
+        charts = QVBoxLayout()
+        charts.setSpacing(16)
+        self.hourly_card = Card("Today by hour", "Focused time in each hour", index=2)
         self.hourly = BarChart(150)
         self.hourly_card.body.addWidget(self.hourly)
-        grid.addWidget(self.hourly_card, 0, 0)
+        charts.addWidget(self.hourly_card)
 
-        self.days_card = Card("Last 14 days", "Click a day to open it in the calendar")
+        self.days_card = Card("Last 14 days", "Click a day to open it in the calendar", index=3)
         self.days = BarChart(150)
         self.days.bar_clicked.connect(self._open_day)
         self.days_card.body.addWidget(self.days)
-        grid.addWidget(self.days_card, 1, 0)
+        charts.addWidget(self.days_card)
+        cols.addLayout(charts, 6)
 
-        self.top_card = Card("Top apps today")
+        self.top_card = Card("Top apps today", index=4)
         self.top_card.header_actions.addWidget(button("View all", kind="link", on_click=self._view_all))
         self.top_list = QVBoxLayout()
         self.top_list.setSpacing(2)
         self.top_card.body.addLayout(self.top_list)
         self.top_card.body.addStretch(1)
-        self.category_title = label("BY CATEGORY", "section")
+        self.category_title = eyebrow("By category")
         self.top_card.body.addWidget(self.category_title)
         self.share = ShareBar()
         self.top_card.body.addWidget(self.share)
-        self.legend = QHBoxLayout()
-        self.legend.setContentsMargins(0, 0, 0, 0)
-        self.legend.setSpacing(12)
         legend_host = QWidget()
-        legend_host.setLayout(self.legend)
+        self.legend = FlowLayout(legend_host)
         self.top_card.body.addWidget(legend_host)
-        grid.addWidget(self.top_card, 0, 1, 2, 1)
-        grid.setColumnStretch(0, 6)
-        grid.setColumnStretch(1, 5)
-        self.add(grid)
+        cols.addWidget(self.top_card, 5)
+        self.add(cols)
         self.layout_.addStretch(1)
 
         bus.data_changed.connect(lambda: self.isVisible() and self.refresh())
@@ -223,7 +247,7 @@ class DashboardView(Page):
     # ------------------------------------------------------------------
 
     def refresh(self) -> None:
-        self.header.set_subtitle(fmt.long_date(date.today()))
+        self.header.set_kicker(_kicker_date())
         snap = self.ctx.snapshot()
         self._refresh_totals(snap)
         self._refresh_charts(snap)
@@ -317,7 +341,7 @@ class DashboardView(Page):
                 EmptyState("layout-grid", "No apps yet today", "Apps appear here as soon as they have been in focus.")
             )
         peak = apps[0]["focused_ms"] if apps else 1
-        for app in apps[:TOP_APPS]:
+        for rank, app in enumerate(apps[:TOP_APPS], start=1):
             limit = app.get("daily_limit_ms")
             over = bool(limit and app["focused_ms"] >= limit)
             fraction = app["focused_ms"] / peak
@@ -325,11 +349,13 @@ class DashboardView(Page):
                 app,
                 fmt.duration(app["focused_ms"], short=True),
                 fraction,
+                rank=rank,
+                dot=None if limit else theme.category_color(app.get("category")),
                 animate_from=self._fractions.get(app["app_id"], 0.0),
                 sub=f"Limit {fmt.duration(limit, short=True)}" + (" reached" if over else "")
                 if limit
-                else (app.get("category") or ""),
-                tone="danger" if over else "accent",
+                else (app.get("category") or "Uncategorized"),
+                tone="danger" if over else ("accent" if app["app_id"] == snap.app_id else "ink"),
                 extra=f"{app['focused_ms'] / total:.0%}",
                 marker=(limit / peak) if limit and limit < peak else None,
             )
@@ -342,22 +368,18 @@ class DashboardView(Page):
         for app in apps:
             by_cat[app.get("category")] = by_cat.get(app.get("category"), 0) + app["focused_ms"]
         ranked = sorted(by_cat.items(), key=lambda kv: -kv[1])
-        self.share.set_segments([(c or "Uncategorized", ms, category_color(c)) for c, ms in ranked])
+        self.share.set_segments([(c or "Uncategorized", ms, theme.category_color(c)) for c, ms in ranked])
         clear_layout(self.legend)
-        for cat, ms in ranked[:4]:
-            dot = label("●")
-            dot.setStyleSheet(f"color: {category_color(cat)}; font-size: 10px;")
-            self.legend.addWidget(dot)
-            self.legend.addWidget(label(f"{cat or 'Uncategorized'} {ms / total:.0%}", "caption"))
-        self.legend.addStretch(1)
+        for cat, ms in ranked:
+            self.legend.addWidget(legend_item(theme.category_color(cat), f"{cat or 'Uncategorized'} {ms / total:.0%}"))
         has_cats = any(c for c in by_cat)
         for w in (self.category_title, self.share):
             w.setVisible(bool(apps))
         self.legend.parentWidget().setVisible(bool(apps))
         if apps and not has_cats:
-            self.category_title.setText("BY CATEGORY · set categories on an app's page")
+            self.category_title.setText("By category · set categories on an app's page")
         else:
-            self.category_title.setText("BY CATEGORY")
+            self.category_title.setText("By category")
 
     def _open_day(self, index: int) -> None:
         if 0 <= index < len(self._day_keys):
@@ -380,3 +402,9 @@ def _count(n: float) -> str:
 def _days(n: float) -> str:
     n = int(round(n))
     return f"{n} day{'s' if n != 1 else ''}"
+
+
+def _kicker_date() -> str:
+    """Instrument-style date readout, e.g. SAT 03 OCT 2026."""
+    d = date.today()
+    return f"{d:%a} {d.day:02d} {d:%b} {d.year}"

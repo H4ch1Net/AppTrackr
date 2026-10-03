@@ -36,6 +36,17 @@ def clock(ms: int | float) -> str:
     return f"{hours}:{minutes:02d}:{seconds:02d}" if hours else f"{minutes}:{seconds:02d}"
 
 
+def axis(ms: int | float) -> str:
+    """Compact engraved axis label: 0, 15M, 1H, 1H30, 12H."""
+    minutes = int(ms // 60000)
+    if minutes == 0:
+        return "0"
+    if minutes < 60:
+        return f"{minutes}M"
+    hours, rest = divmod(minutes, 60)
+    return f"{hours}H{rest:02d}" if rest else f"{hours}H"
+
+
 def percent_change(current: float, previous: float) -> str | None:
     if previous <= 0:
         return None

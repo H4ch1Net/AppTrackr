@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import calendar
+import math
 from dataclasses import dataclass
 from datetime import date, timedelta
 
@@ -10,7 +11,7 @@ from PySide6.QtCore import QPointF, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QSizePolicy, QToolTip, QWidget
 
-from .. import fmt, motion, theme
+from .. import fmt, fonts, motion, theme
 
 
 def _font(widget: QWidget, px: int, bold: bool = False) -> QFont:
@@ -38,6 +39,21 @@ def _nice_step(max_ms: float) -> int:
         if max_ms / step <= 4:
             return step
     return 24 * hour
+
+
+def _column(x: float, baseline: float, width: float, height: float, radius: float = 3.0) -> QPainterPath:
+    """Bar with rounded data-end and a square baseline."""
+    r = min(radius, width / 2, height)
+    top = baseline - height
+    path = QPainterPath()
+    path.moveTo(x, baseline)
+    path.lineTo(x, top + r)
+    path.quadTo(x, top, x + r, top)
+    path.lineTo(x + width - r, top)
+    path.quadTo(x + width, top, x + width, top + r)
+    path.lineTo(x + width, baseline)
+    path.closeSubpath()
+    return path
 
 
 @dataclass
@@ -128,11 +144,11 @@ class BarChart(QWidget):
         self.update()
 
     def _geometry(self):
-        left, right, top, bottom = 44, 6, 8, 22
+        left, right, top, bottom = 46, 4, 18, 30
         plot = QRectF(left, top, max(10, self.width() - left - right), max(10, self.height() - top - bottom))
         n = max(1, len(self._bars))
         slot = plot.width() / n
-        bar_w = max(2.0, min(28.0, slot * 0.62))
+        bar_w = max(2.0, min(20.0, slot * 0.56))
         return plot, slot, bar_w
 
     def _index_at(self, x: float) -> int | None:
@@ -171,51 +187,71 @@ class BarChart(QWidget):
 
         if not any(b.value for b in self._bars):
             p.setPen(QColor(t.text_muted))
-            p.setFont(_font(self, 12))
+            p.setFont(fonts.sans(12))
             p.drawText(plot, Qt.AlignmentFlag.AlignCenter, self._empty_text)
 
+        # Gridlines: solid hairlines, labels engraved in mono.
         step = _nice_step(peak)
         top_value = max(step, ((peak + step - 1) // step) * step)
-        p.setFont(_font(self, 10))
-        grid_pen = QPen(QColor(t.border), 1, Qt.PenStyle.DashLine)
+        p.setFont(fonts.mono(9, 400, 4))
         v = 0
         while v <= top_value:
-            y = plot.bottom() - plot.height() * v / top_value
-            p.setPen(grid_pen if v else QPen(QColor(t.border_strong), 1))
+            y = round(plot.bottom() - plot.height() * v / top_value) + 0.5
+            p.setPen(QPen(QColor(t.border_strong if v == 0 else t.border), 1))
             p.drawLine(QPointF(plot.left(), y), QPointF(plot.right(), y))
             p.setPen(QColor(t.text_muted))
             p.drawText(
-                QRectF(0, y - 8, plot.left() - 8, 16),
+                QRectF(0, y - 8, plot.left() - 10, 16),
                 Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-                fmt.duration(v, short=True) if v else "0",
+                fmt.axis(v),
             )
             v += step
 
-        accent = QColor(t.accent)
+        # Tick ruler under the baseline: a minor tick per slot, a major tick per label.
+        base = round(plot.bottom()) + 0.5
+        for i, bar in enumerate(self._bars):
+            cx = plot.left() + slot * i + slot / 2
+            major = bool(bar.label)
+            p.setPen(QPen(QColor(t.text_muted if major else t.border_strong), 1))
+            p.drawLine(QPointF(cx, base + 2), QPointF(cx, base + (7 if major else 4)))
+
+        ink = QColor(t.ink)
         for i, bar in enumerate(self._bars):
             x = plot.left() + slot * i + (slot - bar_w) / 2
             h = plot.height() * self._shown(i) / top_value
-            color = QColor(accent)
-            if self._highlight is not None and i != self._highlight:
-                color.setAlphaF(0.55)
+            highlighted = i == self._highlight
+            color = QColor(t.accent) if highlighted or self._highlight is None else QColor(ink)
             if self._limit and bar.value > self._limit:
                 color = QColor(t.danger)
             if i == self._hover:
-                color = color.lighter(120) if t.dark else color.darker(110)
-            if h > 0:
+                color = QColor(t.text_dim) if color == ink else color.lighter(115) if t.dark else color.darker(110)
+            if h > 0.5:
                 p.setPen(Qt.PenStyle.NoPen)
                 p.setBrush(color)
-                radius = min(4.0, bar_w / 2)
-                p.drawRoundedRect(QRectF(x, plot.bottom() - max(h, 2), bar_w, max(h, 2)), radius, radius)
+                p.drawPath(_column(x, plot.bottom(), bar_w, max(h, 2.0)))
+            if highlighted and bar.value > 0 and h > 0.5:
+                p.setPen(QColor(t.text))
+                p.setFont(fonts.sans(11, 600, tabular=True))
+                p.drawText(
+                    QRectF(x - 30, plot.bottom() - h - 17, bar_w + 60, 14),
+                    Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom,
+                    fmt.duration(bar.value, short=True),
+                )
             if bar.label:
-                p.setPen(QColor(t.text if i == self._highlight else t.text_muted))
-                p.setFont(_font(self, 10, bold=i == self._highlight))
-                p.drawText(QRectF(x - 20, plot.bottom() + 4, bar_w + 40, 16), Qt.AlignmentFlag.AlignHCenter, bar.label)
+                p.setPen(QColor(t.text if highlighted else t.text_muted))
+                p.setFont(fonts.mono(9, 500 if highlighted else 400, 4))
+                p.drawText(QRectF(x - 20, base + 9, bar_w + 40, 14), Qt.AlignmentFlag.AlignHCenter, bar.label)
 
         if self._limit:
-            y = plot.bottom() - plot.height() * self._limit / top_value
-            p.setPen(QPen(QColor(t.danger), 1.5, Qt.PenStyle.DashLine))
+            y = round(plot.bottom() - plot.height() * self._limit / top_value) + 0.5
+            p.setPen(QPen(QColor(t.danger), 1))
             p.drawLine(QPointF(plot.left(), y), QPointF(plot.right(), y))
+            p.setFont(fonts.mono(9, 500, 6))
+            p.drawText(
+                QRectF(plot.left(), y - 15, plot.width() - 2, 13),
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom,
+                f"LIMIT {fmt.duration(self._limit, short=True).upper()}",
+            )
         p.end()
 
 
@@ -362,23 +398,34 @@ class MonthHeatmap(QWidget):
             return
         super().keyPressEvent(event)
 
+    @staticmethod
+    def level(ms: int, peak: int) -> int:
+        """Quantize a day into 0 (empty) or 1..4 so steps read like LED segments."""
+        if ms <= 0:
+            return 0
+        return min(4, 1 + int(4 * ms / max(peak, 1) - 1e-9))
+
     def paintEvent(self, _event):
         t = theme.current()
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         header, gap, cw, ch = self._layout()
 
-        p.setFont(_font(self, 11, bold=True))
+        p.setFont(fonts.mono(9, 500, 8))
         p.setPen(QColor(t.text_muted))
-        for i, name in enumerate(("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")):
-            p.drawText(QRectF(i * (cw + gap), 0, cw, header - 6), Qt.AlignmentFlag.AlignCenter, name)
+        for i, name in enumerate(("MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN")):
+            p.drawText(
+                QRectF(i * (cw + gap) + 2, 0, cw, header - 8),
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                name,
+            )
 
         values = [v for k, v in self._totals.items() if k.startswith(self._month.strftime("%Y-%m"))]
         peak = max(values) if values else 1
         today = date.today()
         days = calendar.monthrange(self._month.year, self._month.month)[1]
-        accent = QColor(t.accent)
         big = ch >= 46 and cw >= 54
+        radius = 3.0
 
         for n in range(1, days + 1):
             d = self._month.replace(day=n)
@@ -392,34 +439,47 @@ class MonthHeatmap(QWidget):
                 r = r.adjusted(r.width() * shrink, r.height() * shrink, -r.width() * shrink, -r.height() * shrink)
             ms = self._totals.get(d.isoformat(), 0)
             future = d > today
-            if ms > 0:
-                fill = QColor(accent)
-                fill.setAlphaF(0.18 + 0.82 * (ms / peak) ** 0.8)
-            else:
-                fill = QColor(t.track if not future else t.surface_alt)
+            level = self.level(ms, peak)
             p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(fill)
-            p.drawRoundedRect(r, 8, 8)
+            if future:
+                p.setPen(QPen(QColor(t.border), 1))
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                p.drawRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), radius, radius)
+            else:
+                p.setBrush(QColor(t.heat(max(level, 1) if d == today and ms else level, today=d == today)))
+                p.drawRoundedRect(r, radius, radius)
 
             if d == self._hover and not future:
-                p.setPen(QPen(QColor(t.text_muted), 1))
+                p.setPen(QPen(QColor(t.text_dim), 1))
                 p.setBrush(Qt.BrushStyle.NoBrush)
-                p.drawRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), 8, 8)
+                p.drawRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), radius, radius)
             if d == today:
-                p.setPen(QPen(QColor(t.text), 1.5))
-                p.setBrush(Qt.BrushStyle.NoBrush)
-                p.drawRoundedRect(r.adjusted(1, 1, -1, -1), 7, 7)
+                # Today: a notch in the corner, like an index mark on a dial.
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(QColor(t.text))
+                notch = QPainterPath()
+                notch.moveTo(r.right() - 9, r.top())
+                notch.lineTo(r.right() - radius, r.top())
+                notch.quadTo(r.right(), r.top(), r.right(), r.top() + radius)
+                notch.lineTo(r.right(), r.top() + 9)
+                notch.closeSubpath()
+                p.drawPath(notch)
 
-            strong = ms > 0 and ms / peak > 0.55
-            text_color = QColor(t.on_accent) if strong else QColor(t.text_muted if future else t.text)
+            strong = level >= 3
+            if d == today and ms:
+                text_color = QColor(t.on_accent if level >= 3 else t.text)
+            elif strong:
+                text_color = QColor(t.window)
+            else:
+                text_color = QColor(t.text_muted if future or not ms else t.text)
             p.setPen(text_color)
-            p.setFont(_font(self, 12 if big else 11, bold=d == today))
+            p.setFont(fonts.mono(10 if big else 9, 500 if d == today else 400, 0))
             if big:
-                p.drawText(r.adjusted(8, 6, -6, -6), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop, str(n))
+                p.drawText(r.adjusted(7, 5, -6, -5), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop, f"{n:02d}")
                 if ms:
-                    p.setFont(_font(self, 10))
+                    p.setFont(fonts.sans(11, 600, tabular=True))
                     p.drawText(
-                        r.adjusted(8, 6, -6, -6),
+                        r.adjusted(7, 5, -6, -5),
                         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom,
                         fmt.duration(ms, short=True),
                     )
@@ -431,9 +491,9 @@ class MonthHeatmap(QWidget):
         if ring is None and self._selected and self._selected.replace(day=1) == self._month:
             ring = self._cell_rect(self._selected)
         if ring is not None:
-            p.setPen(QPen(QColor(t.accent if not self.hasFocus() else t.text), 2.5))
+            p.setPen(QPen(QColor(t.text if self.hasFocus() else t.accent), 2))
             p.setBrush(Qt.BrushStyle.NoBrush)
-            p.drawRoundedRect(ring.adjusted(1.5, 1.5, -1.5, -1.5), 7, 7)
+            p.drawRoundedRect(ring.adjusted(-2, -2, 2, 2), radius + 2, radius + 2)
         p.end()
 
 
@@ -447,7 +507,7 @@ class ShareBar(QWidget):
         self._to: dict[str, float] = {}
         self._t = 1.0
         self._pending = False
-        self.setFixedHeight(12)
+        self.setFixedHeight(8)
         self.setMouseTracking(True)
 
     def set_segments(self, segments: list[tuple[str, float, str]]) -> None:
@@ -500,38 +560,136 @@ class ShareBar(QWidget):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         h = self.height()
         p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor(t.track))
-        p.drawRoundedRect(QRectF(0, 0, self.width(), h), h / 2, h / 2)
         if not self._segments:
+            p.setBrush(QColor(t.track))
+            p.drawRoundedRect(QRectF(0, 0, self.width(), h), 2, 2)
             return
-        clip = QPainterPath()
-        clip.addRoundedRect(QRectF(0, 0, self.width(), h), h / 2, h / 2)
-        p.setClipPath(clip)
-        x = 0.0
         names = [n for n, _, _ in self._segments] + [n for n in self._from if n not in self._to]
         colors = {n: c for n, _, c in self._segments}
-        for name in names:
-            w = self.width() * self._share(name)
-            if w <= 0:
-                continue
-            p.setBrush(QColor(colors.get(name, theme.current().text_muted)))
-            p.drawRect(QRectF(x, 0, w + 0.5, h))
-            x += w
+        shares = [(n, self._share(n)) for n in names]
+        shares = [(n, v) for n, v in shares if v > 0.002]
+        total = sum(v for _, v in shares) or 1.0
+        gap = 2.0  # surface gap between segments
+        filled = self.width() * min(1.0, total)
+        usable = max(1.0, filled - gap * max(0, len(shares) - 1))
+        x = 0.0
+        for name, share in shares:
+            w = usable * share / total
+            p.setBrush(QColor(colors.get(name, t.text_muted)))
+            p.drawRoundedRect(QRectF(x, 0, max(1.0, w), h), 2, 2)
+            x += w + gap
+        if x < self.width() - gap:
+            p.setBrush(QColor(t.track))
+            p.drawRoundedRect(QRectF(x, 0, self.width() - x, h), 2, 2)
         p.end()
 
 
-CATEGORY_COLORS = {
-    "Work": "#4f8cff",
-    "Study": "#a274ff",
-    "Development": "#10c79a",
-    "Communication": "#f5b82e",
-    "Games": "#f2545b",
-    "Social": "#f0609e",
-    "Entertainment": "#ff8a3d",
-    "Tools": "#8a94a6",
-    None: "#5b6474",
-}
+class HeatLegend(QWidget):
+    """ "LESS ■■■■■ MORE" key for the calendar's quantized steps."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(14)
+        self.setMinimumWidth(220)
+
+    def paintEvent(self, _event):
+        t = theme.current()
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setFont(fonts.mono(9, 500, 8))
+        p.setPen(QColor(t.text_muted))
+        x = 0.0
+        p.drawText(QRectF(x, 0, 40, 14), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "LESS")
+        x = 38.0
+        p.setPen(Qt.PenStyle.NoPen)
+        for level in range(5):
+            p.setBrush(QColor(t.heat(level)))
+            p.drawRoundedRect(QRectF(x, 2, 10, 10), 2, 2)
+            x += 14
+        p.setPen(QColor(t.text_muted))
+        p.drawText(QRectF(x + 4, 0, 40, 14), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "MORE")
+        x += 54
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(t.accent))
+        p.drawRoundedRect(QRectF(x, 2, 10, 10), 2, 2)
+        p.setPen(QColor(t.text_muted))
+        p.drawText(QRectF(x + 16, 0, 50, 14), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "TODAY")
 
 
-def category_color(category: str | None) -> str:
-    return CATEGORY_COLORS.get(category, CATEGORY_COLORS[None])
+class SessionDial(QWidget):
+    """Chronograph for the live session: 60 engraved ticks, a minute arc and a seconds hand."""
+
+    def __init__(self, size: int = 156, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(size, size)
+        self._active = False
+        self._ms = 0
+        self._caption = ""
+        self._hand = 0.0  # degrees, eased between seconds
+        self._last_second = -1
+        self.setAccessibleName("Session timer")
+
+    def set_state(self, active: bool, session_ms: int, caption: str) -> None:
+        self._active, self._ms, self._caption = active, session_ms, caption
+        second = (session_ms // 1000) % 60
+        if active and second != self._last_second:
+            target = second * 6.0
+            start = self._hand if target >= self._hand else self._hand - 360
+            motion.tween(self, start, target, motion.FAST, self._set_hand, motion.EASY_EASE, key="hand")
+            self._last_second = second
+        elif not active:
+            self._last_second = -1
+        self.setToolTip(fmt.clock(session_ms) if active else caption)
+        self.update()
+
+    def _set_hand(self, value: float) -> None:
+        self._hand = value % 360
+        self.update()
+
+    def paintEvent(self, _event):
+        t = theme.current()
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        c = QPointF(self.width() / 2, self.height() / 2)
+        outer = self.width() / 2 - 2
+
+        # Engraved minute ticks.
+        for i in range(60):
+            angle = math.radians(i * 6 - 90)
+            major = i % 5 == 0
+            r1 = outer - (8 if major else 4)
+            color = QColor(t.text_muted if major else t.border_strong)
+            if not self._active:
+                color.setAlphaF(0.6)
+            p.setPen(QPen(color, 1.5 if major else 1, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+            p.drawLine(
+                QPointF(c.x() + r1 * math.cos(angle), c.y() + r1 * math.sin(angle)),
+                QPointF(c.x() + outer * math.cos(angle), c.y() + outer * math.sin(angle)),
+            )
+
+        # Minute arc: progress through the current hour of the session.
+        ring = QRectF(c.x() - outer + 14, c.y() - outer + 14, 2 * (outer - 14), 2 * (outer - 14))
+        p.setPen(QPen(QColor(t.track), 3, Qt.PenStyle.SolidLine, Qt.PenCapStyle.FlatCap))
+        p.drawEllipse(ring)
+        if self._active:
+            minutes = (self._ms % 3_600_000) / 3_600_000
+            p.setPen(QPen(QColor(t.accent), 3, Qt.PenStyle.SolidLine, Qt.PenCapStyle.FlatCap))
+            p.drawArc(ring, 90 * 16, int(-minutes * 360 * 16))
+
+            # Seconds pointer: rides the outer scale so it never crosses the readout.
+            angle = math.radians(self._hand - 90)
+            inner, tip = outer - 20, outer + 1
+            p.setPen(QPen(QColor(t.accent), 2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+            p.drawLine(
+                QPointF(c.x() + inner * math.cos(angle), c.y() + inner * math.sin(angle)),
+                QPointF(c.x() + tip * math.cos(angle), c.y() + tip * math.sin(angle)),
+            )
+
+        # Readout.
+        p.setPen(QColor(t.text if self._active else t.text_muted))
+        p.setFont(fonts.sans(26 if self._ms < 3_600_000 else 22, 600, tabular=True))
+        text = fmt.clock(self._ms) if self._active else "–:––"
+        p.drawText(QRectF(0, c.y() - 22, self.width(), 30), Qt.AlignmentFlag.AlignCenter, text)
+        p.setFont(fonts.mono(8, 500, 12))
+        p.setPen(QColor(t.text_muted))
+        p.drawText(QRectF(0, c.y() + 10, self.width(), 14), Qt.AlignmentFlag.AlignCenter, self._caption.upper())

@@ -6,7 +6,7 @@ from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLineEdit, QPushButton, QVBoxLayout
 
 from ...data import db, queries
-from .. import fmt, icons, motion
+from .. import fmt, icons, motion, theme
 from ..signals import bus
 from ..widgets.components import (
     AppRow,
@@ -38,7 +38,7 @@ class AppsView(Page):
         self.ctx = ctx
         self._fractions: dict[int, float] = {}
 
-        self.header = PageHeader("Apps")
+        self.header = PageHeader("Apps", kicker="Library")
         self.add(self.header)
 
         bar = QHBoxLayout()
@@ -144,7 +144,7 @@ class AppsView(Page):
         else:
             metric = {queries.SORT_OPENS: "opens_count", queries.SORT_CLICKS: "clicks_count"}.get(sort, "focused_ms")
             peak = max(a[metric] for a in apps) or 1
-            rows = [self._row(app, sort, metric, peak, total_ms) for app in apps]
+            rows = [self._row(app, sort, metric, peak, total_ms, rank) for rank, app in enumerate(apps, start=1)]
             for row in rows:
                 self.list.addWidget(row)
             self._fractions = {row.app_id: row.fraction for row in rows}
@@ -155,7 +155,7 @@ class AppsView(Page):
         self.hidden_note.setText(f"{hidden} excluded app{'s are' if hidden != 1 else ' is'} hidden. Manage in Settings")
         self.hidden_note.setVisible(hidden > 0)
 
-    def _row(self, app: dict, sort: str, metric: str, peak: int, total_ms: int) -> AppRow:
+    def _row(self, app: dict, sort: str, metric: str, peak: int, total_ms: int, rank: int) -> AppRow:
         opens = app["opens_count"]
         launches = f"{opens} launch{'es' if opens != 1 else ''}"
         if sort == queries.SORT_OPENS:
@@ -184,6 +184,8 @@ class AppsView(Page):
             app[metric] / peak,
             sub=sub,
             extra=extra,
+            rank=rank,
+            dot=theme.category_color(app.get("category")) if app.get("category") else None,
             animate_from=self._fractions.get(app["app_id"], 0.0),
         )
         row.clicked.connect(self.ctx.open_app)

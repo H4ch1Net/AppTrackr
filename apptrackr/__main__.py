@@ -178,12 +178,16 @@ def self_test() -> int:
     from apptrackr.core.platform import NullPlatform
     from apptrackr.core.tracker import Tracker
     from apptrackr.data import db, demo
+    from apptrackr.ui import fonts
     from apptrackr.ui.main import MainWindow, prepare_app
 
     db.init_db()
     demo.seed(days=7)
     app = QApplication(sys.argv[:1])
     prepare_app(app)
+    if fonts.load() != (fonts.SANS, fonts.MONO):
+        print("self-test: bundled fonts did not load", file=sys.stderr)
+        return 1
     window = MainWindow(Tracker(NullPlatform()))
     for page in ("dashboard", "calendar", "apps", "rewards", "village", "settings"):
         window.show_page(page)

@@ -1,4 +1,4 @@
-"""Build packaging/apptrackr.ico from apptrackr/assets/logo.svg.
+"""Build packaging/apptrackr.ico from apptrackr/assets/logo.svg (logo-small.svg up to 32 px).
 
     python scripts/make_icon.py
 
@@ -14,6 +14,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SIZES = (16, 20, 24, 32, 40, 48, 64, 128, 256)
+SMALL = 32
 
 
 def render_png(svg: bytes, size: int) -> bytes:
@@ -51,9 +52,10 @@ def main() -> int:
     from PySide6.QtGui import QGuiApplication
 
     _app = QGuiApplication(sys.argv[:1])
-    svg = (ROOT / "apptrackr" / "assets" / "logo.svg").read_bytes()
+    assets = ROOT / "apptrackr" / "assets"
+    full, small = (assets / "logo.svg").read_bytes(), (assets / "logo-small.svg").read_bytes()
     out = ROOT / "packaging" / "apptrackr.ico"
-    out.write_bytes(build_ico([(s, render_png(svg, s)) for s in SIZES]))
+    out.write_bytes(build_ico([(s, render_png(small if s <= SMALL else full, s)) for s in SIZES]))
     print(f"wrote {out}")
     return 0
 

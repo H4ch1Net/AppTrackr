@@ -102,7 +102,7 @@ def seed(days: int = 120, seed_value: int = 7, now: datetime | None = None) -> N
     )
 
     _seed_rewards(app_ids)
-    for key, value in {"track_clicks": "1", "ui_theme": "Cyan", "auto_update_check": "0"}.items():
+    for key, value in {"track_clicks": "1", "auto_update_check": "0"}.items():
         db.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
     db.commit()
 

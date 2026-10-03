@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Callable
 
 from PySide6.QtCore import QPoint, QRectF, Qt, QTimer
-from PySide6.QtGui import QAction, QGuiApplication, QIcon, QKeySequence, QPixmap, QShortcut
+from PySide6.QtGui import QAction, QGuiApplication, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
@@ -33,9 +33,9 @@ from ..core.limits import LimitMonitor
 from ..data import db, queries
 from ..rewards import engine as rewards
 from ..updater import check as updater
-from . import fmt, icons, motion, theme
+from . import fmt, fonts, icons, motion, theme
 from .signals import bus, run_async
-from .widgets.components import Badge, IconBinding, Toast, label, tone_color
+from .widgets.components import Badge, IconBinding, StatusModule, Toast, label
 
 log = logging.getLogger(__name__)
 
@@ -84,9 +84,6 @@ class MainWindow(QMainWindow):
         self.ctx = AppContext(self, tracker, clicks, demo)
         self._tracker = tracker
         self._history: list[str] = []
-        blank = QPixmap(16, 16)
-        blank.fill(Qt.GlobalColor.transparent)
-        self._blank_icon = QIcon(blank)
         self._current = "dashboard"
         self._limits = LimitMonitor()
         self._quitting = False
@@ -155,22 +152,26 @@ class MainWindow(QMainWindow):
     def _build_sidebar(self) -> QWidget:
         side = QWidget()
         side.setObjectName("sidebar")
-        side.setFixedWidth(216)
+        side.setFixedWidth(220)
         lay = QVBoxLayout(side)
-        lay.setContentsMargins(12, 18, 12, 14)
+        lay.setContentsMargins(14, 18, 14, 14)
         lay.setSpacing(2)
 
         brand = QHBoxLayout()
-        brand.setContentsMargins(8, 0, 0, 0)
+        brand.setContentsMargins(4, 0, 0, 0)
         brand.setSpacing(10)
         logo = QLabel()
         logo.setPixmap(icons.logo_pixmap(28))
         brand.addWidget(logo)
+        words = QVBoxLayout()
+        words.setSpacing(0)
         name = QLabel(APP_NAME)
-        name.setObjectName("brand")
-        brand.addWidget(name, 1)
+        name.setFont(fonts.sans(15, 600))
+        words.addWidget(name)
+        words.addWidget(label("Attention instrument", "tick"))
+        brand.addLayout(words, 1)
         lay.addLayout(brand)
-        lay.addSpacing(18)
+        lay.addSpacing(22)
 
         self._indicator = QFrame(side)
         self._indicator.setObjectName("navIndicator")
@@ -181,25 +182,30 @@ class MainWindow(QMainWindow):
         self._nav_group.buttonToggled.connect(lambda btn, on: on and self._move_indicator(btn))
         self._nav_buttons: dict[str, QPushButton] = {}
         self._badges: dict[str, Badge] = {}
+        self._keys: dict[str, QLabel] = {}
+
+        overview = label("Overview", "eyebrow")
+        overview.setContentsMargins(10, 0, 0, 6)
+        lay.addWidget(overview)
         for i, (key, text, icon) in enumerate(NAV, start=1):
-            lay.addWidget(self._nav_button(key, text, icon, f"Ctrl+{i}"))
+            if key == "rewards":
+                lay.addSpacing(14)
+                self._progress_label = label("Progress", "eyebrow")
+                self._progress_label.setContentsMargins(10, 0, 0, 6)
+                lay.addWidget(self._progress_label)
+            lay.addWidget(self._nav_button(key, text, icon, str(i)))
         lay.addStretch(1)
-        lay.addWidget(self._nav_button("settings", "Settings", "settings", "Ctrl+,"))
+        lay.addWidget(self._nav_button("settings", "Settings", "settings", ","))
         lay.addSpacing(10)
 
-        self._status = QPushButton()
-        self._status.setObjectName("statusPill")
-        self._status.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._status.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+        self._status = StatusModule()
         self._status.setToolTip("Pause or resume tracking (Ctrl+Shift+P)")
         self._status.clicked.connect(self.toggle_pause)
-        self._status.installEventFilter(self)
-        self._pulse = motion.PulseDot(5, self._status)
-        self._pulse.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self._pulse = self._status.pulse
         lay.addWidget(self._status)
 
-        self._version = label(f"v{__version__}", "caption")
-        self._version.setContentsMargins(8, 8, 0, 0)
+        self._version = label(f"v{__version__}", "tick")
+        self._version.setContentsMargins(4, 10, 0, 0)
         self._version.setTextFormat(Qt.TextFormat.RichText)
         self._version.linkActivated.connect(lambda *_: self.show_page("settings"))
         lay.addWidget(self._version)
@@ -209,12 +215,18 @@ class MainWindow(QMainWindow):
         btn = QPushButton(text)
         btn.setProperty("nav", True)
         btn.setCheckable(True)
-        btn.setFixedHeight(38)
+        btn.setFixedHeight(34)
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
         btn.setFocusPolicy(Qt.FocusPolicy.TabFocus)
-        btn.setToolTip(f"{text} ({shortcut})")
-        IconBinding.attach(btn, icon, "text_muted", 17, checked_tone="accent_text")
+        btn.setToolTip(f"{text} (Ctrl+{shortcut})")
+        IconBinding.attach(btn, icon, "text_muted", 16, checked_tone="accent_text")
         btn.clicked.connect(lambda *_: self.show_page(key))
+        hint = label(shortcut, "tick", align=Qt.AlignmentFlag.AlignCenter)  # keycap; Ctrl is in the tooltip
+        hint.setParent(btn)
+        hint.setObjectName("navKey")
+        hint.setFixedSize(17, 16)
+        hint.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self._keys[key] = hint
         badge = Badge(btn)
         self._badges[key] = badge
         btn.installEventFilter(self)
@@ -222,15 +234,19 @@ class MainWindow(QMainWindow):
         self._nav_buttons[key] = btn
         return btn
 
+    def _place_nav_extras(self, key: str, btn: QPushButton) -> None:
+        badge, hint = self._badges[key], self._keys[key]
+        badge.adjustSize()
+        badge.move(btn.width() - badge.width() - 8, (btn.height() - badge.height()) // 2)
+        hint.adjustSize()
+        hint.move(btn.width() - hint.width() - 10, (btn.height() - hint.height()) // 2)
+        hint.setVisible(not badge.isVisible())
+
     def eventFilter(self, obj, event):
         if event.type() in (event.Type.Resize, event.Type.Move, event.Type.Show, event.Type.Hide):
-            if obj is self._status:
-                self._pulse.move(10, (self._status.height() - self._pulse.height()) // 2)
             for key, btn in self._nav_buttons.items():
                 if btn is obj:
-                    badge = self._badges[key]
-                    badge.adjustSize()
-                    badge.move(btn.width() - badge.width() - 10, (btn.height() - badge.height()) // 2)
+                    self._place_nav_extras(key, btn)
                     if btn.isChecked() and not self._indicator_moving():
                         self._move_indicator(btn, animate=False)
         return super().eventFilter(obj, event)
@@ -330,16 +346,14 @@ class MainWindow(QMainWindow):
         on = rewards.enabled()
         for key in ("rewards", "village"):
             self._nav_buttons[key].setVisible(on)
+        self._progress_label.setVisible(on)
         if not on and self._current in ("rewards", "village"):
             self.show_page("dashboard")
         self._update_badges()
 
     def _update_badges(self) -> None:
         self._badges["rewards"].set_count(rewards.unclaimed_count() if rewards.enabled() else 0)
-        btn = self._nav_buttons["rewards"]
-        badge = self._badges["rewards"]
-        badge.adjustSize()
-        badge.move(btn.width() - badge.width() - 10, (btn.height() - badge.height()) // 2)
+        self._place_nav_extras("rewards", self._nav_buttons["rewards"])
 
     # ------------------------------------------------------------------
     # App context menu (shared by every list)
@@ -406,36 +420,32 @@ class MainWindow(QMainWindow):
         self.toast.show_message(f"Tracking paused{until}", "info")
         self._tick()
 
-    def _status_text(self, snap: trk.Snapshot) -> tuple[str, str, str]:
-        """(headline, detail, icon) for the sidebar pill and tray tooltip."""
+    def _status_text(self, snap: trk.Snapshot) -> tuple[str, str, str, str]:
+        """(headline, subject, clock, tone) for the sidebar module and tray tooltip."""
         if snap.status == trk.STATUS_TRACKING and snap.exe_name:
             app = queries.get_app(snap.app_id) if snap.app_id else None
-            name = app["name"] if app else snap.exe_name
-            return "Tracking", f"{name} · {fmt.clock(snap.session_ms)}", "activity"
+            return "Tracking", app["name"] if app else snap.exe_name, fmt.clock(snap.session_ms), "accent"
         if snap.status == trk.STATUS_PAUSED:
             if snap.paused_until:
                 left = max(0, snap.paused_until - time.time())
-                return "Paused", f"Resumes in {fmt.duration(left * 1000, short=True)}", "pause"
-            return "Paused", "Click to resume", "pause"
+                return "Paused", "Resumes automatically", fmt.clock(left * 1000), "warning"
+            return "Paused", "Click to resume", "", "warning"
         if snap.status == trk.STATUS_IDLE:
-            return "Idle", "Waiting for input", "clock"
+            return "Idle", "Waiting for input", "", "text_muted"
         if snap.status == trk.STATUS_LOCKED:
-            return "Locked", "Screen is locked", "clock"
+            return "Locked", "Screen is locked", "", "text_muted"
         if snap.status == trk.STATUS_UNSUPPORTED:
-            return "Not tracking", "Windows only", "power"
-        return "Tracking", "Waiting for an app", "activity"
+            return "Off", "Tracking needs Windows", "", "text_muted"
+        return "Ready", "Waiting for an app", "", "text_muted"
 
     def _refresh_status(self) -> None:
         snap = self._tracker.snapshot()
-        head, detail, icon = self._status_text(snap)
-        tone = {"activity": "accent", "pause": "warning"}.get(icon, "text_muted")
-        self._status.setText(f"{head}\n{detail}")
+        head, subject, clock, tone = self._status_text(snap)
         live = snap.status == trk.STATUS_TRACKING and snap.app_id is not None
-        self._pulse.set_state(live, theme.current().accent)
-        self._pulse.setVisible(live)
-        self._status.setIcon(self._blank_icon if live else icons.icon(icon, tone_color(tone), 16))
+        self._status.set_status(head, subject, clock, tone, live)
         if getattr(self, "_tray", None):
             today = queries.total_ms(queries.today_str(), queries.today_str()) + snap.uncommitted_ms
+            detail = f"{subject} {clock}".strip()
             self._tray.setToolTip(f"{APP_NAME}: {head.lower()}\n{detail}\nToday: {fmt.duration(today, short=True)}")
             self._pause_action.setText("Resume tracking" if self._tracker.paused else "Pause tracking")
 
@@ -625,21 +635,10 @@ class MainWindow(QMainWindow):
         )
 
 
-FONT_FAMILIES = ("Segoe UI Variable Text", "Segoe UI", "Inter", "SF Pro Text", "Noto Sans", "Ubuntu", "Cantarell")
-
-
 def prepare_app(app: QApplication) -> None:
-    """Style, font, icon and theme shared by the app and the screenshot script."""
-    from PySide6.QtGui import QFont, QFontDatabase
-
+    """Style, fonts, icon and theme shared by the app and the screenshot scripts."""
     app.setStyle("Fusion")
-    available = set(QFontDatabase.families())
-    for family in FONT_FAMILIES:
-        if family in available:
-            font = QFont(family)
-            font.setPixelSize(13)
-            app.setFont(font)
-            break
+    app.setFont(fonts.sans(13))
     app.setWindowIcon(icons.logo_icon())
     apply_app_theme(app)
 

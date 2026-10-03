@@ -1,24 +1,27 @@
-"""Neon Village: inventory, market and buildings that boost future rewards."""
+"""Village: inventory, market and buildings that boost future rewards."""
 
 from __future__ import annotations
 
-from PySide6.QtCore import QRectF, Qt
-from PySide6.QtGui import QColor, QPainter
+from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QProgressBar, QVBoxLayout, QWidget
 
 from ...game import economy
 from ...game import state as game_state
 from ...rewards import engine as rewards
-from .. import fmt, motion, theme
+from .. import fmt, icons, motion, theme
 from ..signals import bus
 from ..widgets.components import (
+    PAGE_MARGIN,
     Card,
+    MetricGrid,
     Page,
     PageHeader,
     StatTile,
     animate_progress,
     button,
     clear_layout,
+    eyebrow,
     icon_label,
     label,
     set_role,
@@ -33,6 +36,35 @@ BUILDING_ICONS = {
     "monument": "landmark",
 }
 RESOURCE_ICONS = {"wood": "tree-pine", "stone": "mountain", "metal": "cog", "food": "wheat", "blueprints": "scroll"}
+
+
+class BlueprintTile(QWidget):
+    """Building glyph on a drafting grid, like a plan on blueprint paper.
+
+    The glyph takes the accent only when the building can be built right now.
+    """
+
+    def __init__(self, icon: str, state: str = "idle", size: int = 40, parent=None):
+        super().__init__(parent)
+        self._icon, self._state = icon, state  # "locked", "idle" or "ready"
+        self.setFixedSize(size, size)
+
+    def paintEvent(self, _event):
+        t = theme.current()
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        r = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        p.setPen(QPen(QColor(t.border_strong), 1))
+        p.setBrush(QColor(t.surface_alt))
+        p.drawRoundedRect(r, 4, 4)
+        p.setPen(QPen(QColor(t.border), 1))
+        step = self.width() / 5
+        for i in range(1, 5):
+            p.drawLine(QPointF(i * step, 2), QPointF(i * step, self.height() - 2))
+            p.drawLine(QPointF(2, i * step), QPointF(self.width() - 2, i * step))
+        color = {"locked": t.text_muted, "ready": t.accent_text}.get(self._state, t.text_dim)
+        pm = icons.pixmap(self._icon, color, 22)
+        p.drawPixmap(int((self.width() - 22) / 2), int((self.height() - 22) / 2), pm)
 
 
 class LevelPips(QWidget):
@@ -70,7 +102,7 @@ class LevelPips(QWidget):
             p.drawRoundedRect(QRectF(x, 0, w, self.height()), 3, 3)
             fill = min(1.0, max(0.0, self._level - i))  # partially filled while animating
             if fill > 0:
-                p.setBrush(QColor(t.accent))
+                p.setBrush(QColor(t.text_dim))
                 p.drawRoundedRect(QRectF(x, 0, w * fill, self.height()), 3, 3)
 
 
@@ -80,22 +112,20 @@ class VillageView(Page):
         self.setObjectName("page")
         self.ctx = ctx
 
-        self.header = PageHeader("Neon Village", "Spend resources from rewards on buildings that boost future rewards.")
+        self.header = PageHeader(
+            "Village", "Spend resources from rewards on buildings that boost future rewards.", kicker="Progress"
+        )
         self.add(self.header)
 
-        tiles = QHBoxLayout()
-        tiles.setSpacing(14)
-        self.t_level = StatTile("Player level", "zap")
-        self.t_villagers = StatTile("Villagers", "house")
-        self.t_credits = StatTile("Credits", "coins", tone="gold")
-        self.t_bonus = StatTile("Active bonuses", "sparkles")
-        for t in (self.t_level, self.t_villagers, self.t_credits, self.t_bonus):
-            tiles.addWidget(t)
-        self.add(tiles)
+        self.t_level = StatTile("Player level", framed=False)
+        self.t_villagers = StatTile("Villagers", framed=False)
+        self.t_credits = StatTile("Credits", framed=False)
+        self.t_bonus = StatTile("Active bonuses", framed=False)
+        self.add(MetricGrid([self.t_level, self.t_villagers, self.t_credits, self.t_bonus], columns=4))
 
         row = QHBoxLayout()
-        row.setSpacing(14)
-        self.inventory = Card("Inventory")
+        row.setSpacing(16)
+        self.inventory = Card("Inventory", index=1)
         self.inv_grid = QGridLayout()
         self.inv_grid.setHorizontalSpacing(12)
         self.inv_grid.setVerticalSpacing(10)
@@ -103,22 +133,23 @@ class VillageView(Page):
         self.inventory.body.addStretch(1)
         row.addWidget(self.inventory, 3)
 
-        self.market = Card("Market", "Trade credits for resources")
+        self.market = Card("Market", "Trade credits for resources", index=2)
         self.market_grid = QGridLayout()
         self.market_grid.setSpacing(8)
         self.market.body.addLayout(self.market_grid)
         row.addWidget(self.market, 2)
         self.add(row)
 
-        self.add(label("Buildings", "heading"))
+        self.add(eyebrow("Buildings", 3))
         self.buildings = QGridLayout()
-        self.buildings.setSpacing(14)
+        self.buildings.setSpacing(16)
         self.add(self.buildings)
         self.layout_.addStretch(1)
 
         self._amounts: dict[str, int] = {}
         self._levels: dict[str, int] = {}
         self._cards: dict[str, Card] = {}
+        self._columns = 0
         self._just_built: str | None = None
         bus.rewards_changed.connect(lambda: self.isVisible() and self.refresh())
 
@@ -143,13 +174,13 @@ class VillageView(Page):
         clear_layout(self.inv_grid)
         inv = village["inventory"]
         for i, res in enumerate(economy.RESOURCES):
-            r, c = divmod(i, 2)
+            r, c = i, 0
             cell = QVBoxLayout()
             cell.setContentsMargins(0, 0, 0, 0)
             cell.setSpacing(4)
             top = QHBoxLayout()
             top.setSpacing(6)
-            top.addWidget(icon_label(RESOURCE_ICONS[res], "accent", 15))
+            top.addWidget(icon_label(RESOURCE_ICONS[res], "text_dim", 15))
             top.addWidget(label(res.title()))
             top.addStretch(1)
             amount = inv.get(res, 0)
@@ -180,32 +211,54 @@ class VillageView(Page):
 
         clear_layout(self.buildings)
         self._cards = {}
-        for i, name in enumerate(game_state.BUILDINGS):
-            card = self._building_card(name, village, profile["level"])
-            self._cards[name] = card
-            self.buildings.addWidget(card, i // 3, i % 3)
+        for name in game_state.BUILDINGS:
+            self._cards[name] = self._building_card(name, village, profile["level"])
+        self._columns = 0
+        self._place_buildings()
         self._levels = {name: game_state.building_level(village, name) for name in game_state.BUILDINGS}
         if self._just_built in self._cards:
             motion.flash(self._cards[self._just_built])
         self._just_built = None
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._place_buildings()
+
+    def _place_buildings(self) -> None:
+        """Lay building cards out in as many columns (up to 3) as fit the page."""
+        cards = list(self._cards.values())
+        if not cards:
+            return
+        spacing = self.buildings.horizontalSpacing()
+        widest = max(c.minimumSizeHint().width() for c in cards)
+        room = self.viewport().width() - 2 * PAGE_MARGIN
+        columns = max(1, min(3, (room + spacing) // (widest + spacing)))
+        if columns == self._columns:
+            return
+        self._columns = columns
+        for card in cards:
+            self.buildings.removeWidget(card)
+        for i, card in enumerate(cards):
+            self.buildings.addWidget(card, i // columns, i % columns)
         for c in range(3):
-            self.buildings.setColumnStretch(c, 1)
+            self.buildings.setColumnStretch(c, 1 if c < columns else 0)
 
     def _building_card(self, name: str, village: dict, player_level: int) -> Card:
         spec = game_state.BUILDINGS[name]
         level = game_state.building_level(village, name)
         locked = player_level < spec["unlock_level"]
         maxed = level >= spec["max_level"]
+        ok, reason = game_state.can_build(name)
         card = Card(padding=16, spacing=8)
 
         top = QHBoxLayout()
         top.setSpacing(10)
-        top.addWidget(icon_label(BUILDING_ICONS[name], "text_muted" if locked else "accent", 22))
+        top.addWidget(BlueprintTile(BUILDING_ICONS[name], "locked" if locked else ("ready" if ok else "idle")))
         title = label(name.title(), "heading")
         top.addWidget(title, 1)
         pill = label(
             "Locked" if locked else ("Max" if maxed else f"Lv {level}/{spec['max_level']}"),
-            "pill" if locked or not level else "pillAccent",
+            "pill",
         )
         top.addWidget(pill)
         card.body.addLayout(top)
@@ -227,7 +280,6 @@ class VillageView(Page):
             card.body.addWidget(label("Cost: " + ", ".join(parts), "caption", wrap=True))
         card.body.addStretch(1)
 
-        ok, reason = game_state.can_build(name)
         btn = button(
             "Build" if level == 0 else ("Upgrade" if not maxed else "Fully upgraded"),
             icon="hammer" if ok else None,

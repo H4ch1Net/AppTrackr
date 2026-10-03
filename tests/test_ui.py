@@ -50,6 +50,19 @@ def test_every_page_renders(window, qapp):
         assert not window.grab().isNull()
 
 
+def test_pages_fit_minimum_window(window, qapp):
+    """At the smallest window size, two-column rows stack instead of clipping on the right."""
+    window.resize(window.minimumSize())
+    window.open_app(queries.find_app_id("code.exe"))
+    for page in ("dashboard", "calendar", "apps", "rewards", "village", "settings", "app"):
+        if page != "app":
+            window.show_page(page)
+        view = window._views[page]
+        for _ in range(3):  # layout requests settle over a few event-loop passes
+            qapp.processEvents()
+        assert view.widget().minimumSizeHint().width() <= view.viewport().width(), page
+
+
 def test_app_detail_and_back_navigation(window, qapp):
     window.show_page("calendar")
     app_id = queries.find_app_id("code.exe")
@@ -100,7 +113,7 @@ def test_unsupported_platform_shows_state(qapp):
     win.show_page("dashboard")
     win._tick()
     assert win._views["dashboard"].now.name.text() == "Tracking unavailable"
-    assert "Windows" in win._status.text()
+    assert "Windows" in win._status.accessibleName()
     win._quitting = True
     win.close()
 

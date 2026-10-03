@@ -27,6 +27,7 @@ from ..widgets.components import (
     Card,
     EmptyState,
     IconBinding,
+    MetricGrid,
     Page,
     SettingRow,
     StatTile,
@@ -34,6 +35,7 @@ from ..widgets.components import (
     button,
     clear_layout,
     divider,
+    eyebrow,
     label,
 )
 
@@ -70,7 +72,9 @@ class AppDetailView(Page):
         self.avatar = AppAvatar("", None, 48)
         head.addWidget(self.avatar)
         names = QVBoxLayout()
-        names.setSpacing(2)
+        names.setSpacing(3)
+        self.kicker = label("", "eyebrowAccent")
+        names.addWidget(self.kicker)
         self.title = label("", "title")
         names.addWidget(self.title)
         self.subtitle = label("", "subtitle")
@@ -89,27 +93,23 @@ class AppDetailView(Page):
         head.addWidget(self.more_btn)
         self.add(head)
 
-        tiles = QGridLayout()
-        tiles.setSpacing(14)
-        self.t_today = StatTile("Today", "clock")
-        self.t_week = StatTile("Last 7 days", "calendar-days")
-        self.t_month = StatTile("Last 30 days", "activity")
-        self.t_avg = StatTile("Daily average", "timer")
-        for i, tile in enumerate((self.t_today, self.t_week, self.t_month, self.t_avg)):
-            tiles.addWidget(tile, 0, i)
-        self.add(tiles)
+        self.t_today = StatTile("Today", framed=False)
+        self.t_week = StatTile("Last 7 days", framed=False)
+        self.t_month = StatTile("Last 30 days", framed=False)
+        self.t_avg = StatTile("Daily average", framed=False)
+        self.add(MetricGrid([self.t_today, self.t_week, self.t_month, self.t_avg], columns=4))
 
-        self.chart_card = Card("Last 30 days", "Focused time per day")
+        self.chart_card = Card("Last 30 days", "Focused time per day", index=1)
         self.chart = BarChart(180)
         self.chart_card.body.addWidget(self.chart)
         self.add(self.chart_card)
 
-        cols = QHBoxLayout()
-        cols.setSpacing(14)
+        cols = self.stack_when_narrow(QHBoxLayout())
+        cols.setSpacing(16)
         left = QVBoxLayout()
-        left.setSpacing(14)
+        left.setSpacing(16)
 
-        self.settings_card = Card("Settings")
+        self.settings_card = Card("Settings", index=2)
         self.category = QComboBox()
         self.category.addItem("Uncategorized", None)
         for cat in queries.CATEGORIES:
@@ -138,7 +138,7 @@ class AppDetailView(Page):
         self.settings_card.body.addWidget(self.reward_hint)
         left.addWidget(self.settings_card)
 
-        self.facts = Card("Details")
+        self.facts = Card("Details", index=4)
         self.facts_grid = QGridLayout()
         self.facts_grid.setHorizontalSpacing(16)
         self.facts_grid.setVerticalSpacing(8)
@@ -147,7 +147,7 @@ class AppDetailView(Page):
         left.addStretch(1)
         cols.addLayout(left, 1)
 
-        self.sessions_card = Card("Recent sessions", "Each continuous stretch of focus")
+        self.sessions_card = Card("Recent sessions", "Each continuous stretch of focus", index=3)
         self.sessions = QVBoxLayout()
         self.sessions.setSpacing(0)
         self.sessions_card.body.addLayout(self.sessions)
@@ -176,6 +176,7 @@ class AppDetailView(Page):
         self.back.setText(f"Back to {self.ctx.window.back_label()}")
         self.avatar.set_app(app["name"], app.get("icon_path"))
         self.title.setText(app["name"])
+        self.kicker.setText(app.get("category") or "Uncategorized")
         self.subtitle.setText(app["exe_name"] + (f"  ·  {app['icon_path']}" if app.get("icon_path") else ""))
         self.fav_btn.setChecked(bool(app.get("is_favorite")))
         self.fav_btn.setText("Favorite" if app.get("is_favorite") else "Add to favorites")
@@ -252,7 +253,7 @@ class AppDetailView(Page):
             ("Executable", app["exe_name"]),
         ]
         for row, (name, value) in enumerate(facts):
-            self.facts_grid.addWidget(label(name, "muted"), row, 0)
+            self.facts_grid.addWidget(eyebrow(name), row, 0)
             val = label(value)
             val.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             self.facts_grid.addWidget(val, row, 1)
@@ -271,7 +272,7 @@ class AppDetailView(Page):
             if day != last_day:
                 heading = label(
                     fmt.relative_day(day).upper() if (date.today() - day).days < 2 else fmt.long_date(day).upper(),
-                    "section",
+                    "eyebrow",
                 )
                 heading.setContentsMargins(0, 10 if last_day else 0, 0, 4)
                 self.sessions.addWidget(heading)

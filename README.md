@@ -1,8 +1,9 @@
 <div align="center">
 
-<img src="apptrackr/assets/logo.svg" width="88" alt="AppTrackr logo">
-
-# AppTrackr
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/banner-dark.png">
+  <img src="docs/banner-light.png" alt="AppTrackr, foreground time tracker for Windows">
+</picture>
 
 Foreground app usage tracker for Windows. Counts the time each app actually has focus,
 shows it as a dashboard, calendar and per-app history, and stays out of the way in the tray.
@@ -37,7 +38,7 @@ time in chosen apps into XP and a small village-building game.
 | Apps | Search, period filter (today to all time), category and favorite filters, sort by time, launches or clicks |
 | App detail | Today / 7 / 30 day totals, 30-day chart, recent sessions, first and last seen, longest session, rename, category |
 | Control | Per-app daily limits with notifications, exclude any app (with undo), pause from the tray for a set time |
-| Rewards | Optional XP, levels, streaks and the Neon Village game with buildings that boost future rewards |
+| Rewards | Optional XP, levels, streaks and a village-building game whose buildings boost future rewards |
 | Desktop | Tray icon with live tooltip, launch at sign-in (starts hidden), single instance, dark, light or system theme with 8 accents |
 | Motion | Fluent-timed page transitions, counters, chart and list motion that explain each change; follows Windows *Animation effects* and can be turned off in Settings |
 | Data | CSV and JSON export, consistent database backup and validated restore, automatic schema migrations |
@@ -56,7 +57,7 @@ time in chosen apps into XP and a small village-building game.
   </tr>
   <tr>
     <td><img src="docs/screenshots/rewards.png" alt="Rewards"><br><sub>Level progress, pending rewards and earning apps</sub></td>
-    <td><img src="docs/screenshots/village.png" alt="Village"><br><sub>Neon Village: buildings, inventory and market</sub></td>
+    <td><img src="docs/screenshots/village.png" alt="Village"><br><sub>Village: buildings, inventory and market</sub></td>
   </tr>
   <tr>
     <td><img src="docs/screenshots/settings.png" alt="Settings"><br><sub>Settings apply immediately</sub></td>
@@ -66,6 +67,21 @@ time in chosen apps into XP and a small village-building game.
 
 Screenshots and the animation above are generated from demo data with `python scripts/screenshots.py`
 and `python scripts/record_demo.py`.
+
+## Design
+
+The interface is styled as an instrument panel: warm neutrals, hairline rules, engraved monospaced labels
+and one signal color. Recorded history is drawn in neutral ink; the signal color marks only what is live,
+selected or current. Charts use hairline grids, thin bars on tick-mark rulers and a five-step calendar ramp.
+Category colors are a categorical palette checked for color-vision-deficiency separation in both themes,
+and text never takes a data color.
+
+| Element | Choice |
+| --- | --- |
+| Type | Instrument Sans (interface, tabular figures), Martian Mono (labels) |
+| Themes | Graphite (dark) and Paper (light), or follow Windows |
+| Signal color | Orange `#ff6b1a` by default, 8 presets in Settings |
+| Shape | 6 px panels, 4 px controls, 1 px borders, no shadows |
 
 ## Installation
 
@@ -83,7 +99,7 @@ Requirements: Windows 10 or 11 (64-bit). Upgrading over v1.0 keeps your data and
 AppTrackr starts tracking as soon as it runs. Closing the window keeps it running in the tray;
 use **Quit** from the tray menu (or <kbd>Ctrl</kbd>+<kbd>Q</kbd>) to stop it.
 
-- **Pause.** Click the status pill at the bottom of the sidebar, use the dashboard button, or pick
+- **Pause.** Click the tracking module at the bottom of the sidebar, use the dashboard button, or pick
   *Pause for* in the tray menu to resume automatically after 15 minutes to 2 hours.
 - **Daily limits.** Open an app and choose a limit. You get one notification per day when it is passed;
   the dashboard and charts mark the limit.
@@ -182,6 +198,7 @@ python -m apptrackr               # real tracking (Windows)
 | Lint and format | `ruff check . && ruff format .` |
 | Regenerate screenshots | `python scripts/screenshots.py` |
 | Record the README animation | `python scripts/record_demo.py` |
+| Rebuild the README banner and social preview | `python scripts/make_art.py` |
 | Rebuild the app icon | `python scripts/make_icon.py` |
 | Build the app folder | `pyinstaller packaging/apptrackr.spec` |
 | Build the installer | `iscc /DAppVersion=1.1.0 packaging\installer.iss` |
@@ -214,9 +231,9 @@ apptrackr/
   game/              village state and balance values
   updater/           GitHub release check and installer download
   ui/                main window, theme and motion tokens, icons, views and shared widgets
-  assets/            logo and Lucide icons
+  assets/            logo, Lucide icons, illustrations, bundled fonts
 packaging/           PyInstaller spec, Inno Setup script, app icon
-scripts/             screenshot, demo animation and icon generators
+scripts/             screenshot, demo animation, README art and icon generators
 tests/               pytest suite (data, tracker, rewards, updater, offscreen UI)
 ```
 
@@ -237,7 +254,7 @@ flowchart LR
 <details>
 <summary>Troubleshooting</summary>
 
-- **Nothing is tracked.** Check the status pill in the sidebar. *Paused* resumes on click. *Idle* means no
+- **Nothing is tracked.** Check the tracking module at the bottom of the sidebar. *Paused* resumes on click. *Idle* means no
   input for the idle timeout. Apps you excluded are listed in Settings.
 - **An app shows up under an odd name.** Open it and use the menu next to *Favorite* to rename it.
 - **The window opens at sign-in instead of staying in the tray.** Startup entries created by v1.0 lack
@@ -256,3 +273,6 @@ regenerated screenshots if they change what the README shows.
 ## License
 
 [MIT](LICENSE). Icons from [Lucide](https://lucide.dev) (ISC, see `apptrackr/assets/icons/LICENSE`).
+Fonts: [Instrument Sans](https://github.com/Instrument/instrument-sans) and
+[Martian Mono](https://github.com/evilmartians/mono), both SIL Open Font License 1.1
+(see `apptrackr/assets/fonts`).

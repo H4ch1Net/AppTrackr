@@ -7,7 +7,7 @@ import threading
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QSize, Qt, QUrl, Signal
+from PySide6.QtCore import QObject, QRectF, QSize, Qt, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QPainter, QPen
 from PySide6.QtWidgets import (
     QAbstractButton,
@@ -89,12 +89,12 @@ class Swatch(QAbstractButton):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         if self.isChecked() or self.hasFocus():
-            p.setPen(QPen(QColor(t.text), 2))
+            p.setPen(QPen(QColor(t.text if self.isChecked() else t.accent), 1.5))
             p.setBrush(Qt.BrushStyle.NoBrush)
-            p.drawEllipse(1, 1, 26, 26)
+            p.drawRoundedRect(QRectF(1.5, 1.5, 25, 25), 5, 5)
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QColor(self.color))
-        p.drawEllipse(5, 5, 18, 18)
+        p.drawRoundedRect(QRectF(6, 6, 16, 16), 3, 3)
 
 
 class SettingsView(Page):
@@ -102,7 +102,7 @@ class SettingsView(Page):
         super().__init__(parent)
         self.setObjectName("page")
         self.ctx = ctx
-        self.add(PageHeader("Settings", "Changes are saved automatically."))
+        self.add(PageHeader("Settings", "Changes are saved automatically.", kicker="Preferences"))
 
         self.update_banner = Card(padding=14)
         self.update_banner.setProperty("card", False)
@@ -129,7 +129,7 @@ class SettingsView(Page):
     # ------------------------------------------------------------------
 
     def _build_general(self) -> None:
-        card = Card("General")
+        card = Card("General", index=1)
         self.autostart = Toggle()
         self.autostart.toggled.connect(self._set_autostart)
         desc = "Starts in the tray when you sign in to Windows."
@@ -161,14 +161,14 @@ class SettingsView(Page):
         card.body.addWidget(
             SettingRow(
                 "Rewards and village",
-                "XP, levels and the Neon Village game. Turning this off hides both pages; nothing is deleted.",
+                "XP, levels and the village game. Turning this off hides both pages; nothing is deleted.",
                 self.rewards,
             )
         )
         self.add(card)
 
     def _build_tracking(self) -> None:
-        card = Card("Tracking")
+        card = Card("Tracking", index=2)
         self.idle = QComboBox()
         for text, sec in IDLE_CHOICES:
             self.idle.addItem(text, sec)
@@ -204,7 +204,7 @@ class SettingsView(Page):
         self.add(card)
 
     def _build_appearance(self) -> None:
-        card = Card("Appearance")
+        card = Card("Appearance", index=3)
         self.mode = SegmentedControl(["Dark", "Light", "System"])
         self.mode.changed.connect(self._set_mode)
         card.body.addWidget(SettingRow("Theme", "", self.mode))
@@ -235,7 +235,7 @@ class SettingsView(Page):
         self.add(card)
 
     def _build_data(self) -> None:
-        card = Card("Data", "Usage is stored only on this computer.")
+        card = Card("Data", "Usage is stored only on this computer.", index=4)
         row = QHBoxLayout()
         row.setSpacing(8)
         row.addWidget(button("Export CSV", icon="download", on_click=lambda: self._export("csv")))
@@ -251,7 +251,7 @@ class SettingsView(Page):
         self.add(card)
 
     def _build_updates(self) -> None:
-        card = Card("Updates")
+        card = Card("Updates", index=5)
         self.auto_update = Toggle()
         self.auto_update.toggled.connect(lambda on: self._save("auto_update_check", on))
         card.body.addWidget(
@@ -282,7 +282,7 @@ class SettingsView(Page):
         self.add(card)
 
     def _build_about(self) -> None:
-        card = Card("About")
+        card = Card("About", index=6)
         links = QHBoxLayout()
         links.setSpacing(16)
         for text, url in (
@@ -294,7 +294,7 @@ class SettingsView(Page):
             links.addWidget(button(text, kind="link", on_click=lambda u=url: QDesktopServices.openUrl(QUrl(u))))
         links.addStretch(1)
         card.body.addLayout(links)
-        card.body.addWidget(label("KEYBOARD SHORTCUTS", "section"))
+        card.body.addWidget(label("KEYBOARD SHORTCUTS", "eyebrow"))
         grid = QGridLayout()
         grid.setHorizontalSpacing(14)
         grid.setVerticalSpacing(6)

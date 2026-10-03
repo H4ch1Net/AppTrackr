@@ -1,4 +1,4 @@
-"""Neon Village: buildings, inventory and the credit market."""
+"""Village: buildings, inventory and the credit market."""
 
 from __future__ import annotations
 

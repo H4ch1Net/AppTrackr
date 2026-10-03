@@ -10,7 +10,7 @@ from ...game import economy
 from ...game import state as game_state
 from ...rewards import engine as rewards
 from ...rewards import rules
-from .. import fmt, motion, theme
+from .. import fmt, fonts, motion, theme
 from ..signals import bus
 from ..widgets.components import (
     AppAvatar,
@@ -22,8 +22,10 @@ from ..widgets.components import (
     button,
     clear_layout,
     count_to,
+    eyebrow,
     icon_label,
     label,
+    vdivider,
 )
 
 METRIC_TEXT = {"focused_ms": "focused", "opens_count": "launches", "clicks_count": "clicks"}
@@ -35,59 +37,65 @@ class RewardsView(Page):
         self.setObjectName("page")
         self.ctx = ctx
 
-        self.header = PageHeader("Rewards", "Time in the apps you choose earns XP and resources for your village.")
+        self.header = PageHeader(
+            "Rewards", "Time in the apps you choose earns XP and resources for your village.", kicker="Progress"
+        )
         self.claim_all = button("Claim all", kind="primary", icon="sparkles", on_click=self._claim_all)
         self.header.actions.addWidget(self.claim_all)
         self.add(self.header)
 
         self.profile = Card(padding=20)
         top = QHBoxLayout()
-        top.setSpacing(12)
-        self.crown = icon_label("crown", "gold", 22)
-        top.addWidget(self.crown)
-        self.level = label("", "value")
-        top.addWidget(self.level)
-        top.addStretch(1)
-        self.stats = QHBoxLayout()
-        self.stats.setSpacing(22)
-        self.stat_values = {}
-        for key, caption, icon, tone in (
-            ("xp", "Total XP", "zap", "accent"),
-            ("credits", "Credits", "coins", "gold"),
-            ("streak", "Streak", "flame", "gold"),
-        ):
-            box = QHBoxLayout()
-            box.setSpacing(8)
-            box.addWidget(icon_label(icon, tone, 18))
-            col = QVBoxLayout()
-            col.setSpacing(0)
-            value = label("–")
-            value.setStyleSheet("font-weight: 700; font-size: 16px;")
-            col.addWidget(value)
-            col.addWidget(label(caption, "caption"))
-            box.addLayout(col)
-            self.stats.addLayout(box)
-            self.stat_values[key] = value
-        top.addLayout(self.stats)
-        self.profile.body.addLayout(top)
+        top.setSpacing(28)
+        level_col = QVBoxLayout()
+        level_col.setSpacing(2)
+        cap = QHBoxLayout()
+        cap.setSpacing(6)
+        cap.addWidget(eyebrow("Level"))
+        self.crown = icon_label("crown", "gold", 14)
+        cap.addWidget(self.crown)
+        cap.addStretch(1)
+        level_col.addLayout(cap)
+        self.level = label("", "hero")
+        level_col.addWidget(self.level)
+        top.addLayout(level_col)
+        progress_col = QVBoxLayout()
+        progress_col.setSpacing(8)
+        progress_col.addStretch(1)
+        self.progress_text = label("", "caption")
+        progress_col.addWidget(self.progress_text)
         self.progress = QProgressBar()
         self.progress.setTextVisible(False)
-        self.profile.body.addWidget(self.progress)
-        self.progress_text = label("", "caption")
-        self.profile.body.addWidget(self.progress_text)
+        self.progress.setProperty("tone", "accent")
+        progress_col.addWidget(self.progress)
+        progress_col.addSpacing(10)
+        top.addLayout(progress_col, 1)
+        self.stat_values = {}
+        for key, caption in (("xp", "Total XP"), ("credits", "Credits"), ("streak", "Streak")):
+            top.addWidget(vdivider())
+            col = QVBoxLayout()
+            col.setSpacing(4)
+            col.addWidget(eyebrow(caption))
+            value = label("–")
+            value.setFont(fonts.sans(20, 600, tabular=True))
+            col.addWidget(value)
+            col.addStretch(1)
+            top.addLayout(col)
+            self.stat_values[key] = value
+        self.profile.body.addLayout(top)
         self.add(self.profile)
 
-        cols = QHBoxLayout()
-        cols.setSpacing(14)
+        cols = self.stack_when_narrow(QHBoxLayout())
+        cols.setSpacing(16)
         left = QVBoxLayout()
-        left.setSpacing(14)
-        self.pending = Card("Pending rewards")
+        left.setSpacing(16)
+        self.pending = Card("Pending rewards", index=1)
         self.pending_list = QVBoxLayout()
         self.pending_list.setSpacing(2)
         self.pending.body.addLayout(self.pending_list)
         left.addWidget(self.pending)
 
-        self.earning = Card("Earning apps", "Progress toward each app's next milestone today")
+        self.earning = Card("Earning apps", "Progress toward each app's next milestone today", index=2)
         self.earning_list = QVBoxLayout()
         self.earning_list.setSpacing(4)
         self.earning.body.addLayout(self.earning_list)
@@ -103,7 +111,7 @@ class RewardsView(Page):
         left.addStretch(1)
         cols.addLayout(left, 3)
 
-        self.rules_card = Card("How it works")
+        self.rules_card = Card("How it works", index=3)
         self._build_rules(self.rules_card)
         cols.addWidget(self.rules_card, 2, Qt.AlignmentFlag.AlignTop)
         self.add(cols)
@@ -143,7 +151,7 @@ class RewardsView(Page):
             grid.addWidget(label(fmt.reward(reward, ", ")), row, 1)
             row += 1
         card.body.addLayout(grid)
-        card.body.addWidget(label("STREAKS", "section"))
+        card.body.addWidget(label("STREAKS", "eyebrow"))
         card.body.addWidget(
             label(
                 "Spend 30 minutes in favorite apps each day to grow a streak. Milestone days pay a bonus.",
@@ -176,7 +184,7 @@ class RewardsView(Page):
         bonuses = game_state.get_bonuses()
         self.crown.setVisible(bonuses["has_monument"])
         self.crown.setToolTip("Monument built")
-        self.level.setText(f"Level {profile['level']}")
+        self.level.setText(str(profile["level"]))
         into, need = economy.level_progress(profile["xp"])
         self.progress.setMaximum(need)
         self.progress_text.setText(f"{into} / {need} XP to level {profile['level'] + 1}")
@@ -187,7 +195,7 @@ class RewardsView(Page):
         groups = rewards.unclaimed_by_app()
         self.claim_all.setEnabled(bool(groups))
         total = sum(len(g["event_ids"]) for g in groups)
-        self.pending.title_label.setText(f"Pending rewards ({total})" if total else "Pending rewards")
+        self.pending.set_title(f"Pending rewards · {total}" if total else "Pending rewards")
         clear_layout(self.pending_list)
         self._pending_rows = []
         if not groups:
@@ -242,7 +250,9 @@ class RewardsView(Page):
         n = len(group["event_ids"])
         text.addWidget(label(f"{n} milestone{'s' if n != 1 else ''}", "caption"))
         lay.addLayout(text, 1)
-        lay.addWidget(label(fmt.reward(group["reward"]), "accent"))
+        amounts = label(fmt.reward(group["reward"], "  ·  "), "tick")
+        amounts.setFont(fonts.mono(10, 500, 2))
+        lay.addWidget(amounts)
         lay.addWidget(button("Claim", on_click=lambda ids=group["event_ids"]: self._claim(ids, row)))
         return row
 

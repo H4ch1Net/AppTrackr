@@ -9,10 +9,22 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout
 
 from ...data import queries
-from .. import fmt, motion
+from .. import fmt, fonts, motion, theme
 from ..signals import bus
-from ..widgets.charts import Bar, BarChart, MonthHeatmap
-from ..widgets.components import AppRow, Card, EmptyState, Page, PageHeader, button, clear_layout, count_to, label
+from ..widgets.charts import Bar, BarChart, HeatLegend, MonthHeatmap
+from ..widgets.components import (
+    AppRow,
+    Card,
+    EmptyState,
+    Page,
+    PageHeader,
+    button,
+    clear_layout,
+    count_to,
+    divider,
+    eyebrow,
+    label,
+)
 
 
 class CalendarView(Page):
@@ -25,7 +37,7 @@ class CalendarView(Page):
         self._day_total = 0
         self._fractions: dict[int, float] = {}
 
-        self.header = PageHeader("Calendar")
+        self.header = PageHeader("Calendar", kicker="History")
         self.prev_btn = button(
             "", icon="chevron-left", tooltip="Previous month (PgUp)", on_click=lambda: self._shift(-1)
         )
@@ -35,11 +47,12 @@ class CalendarView(Page):
             self.header.actions.addWidget(b)
         self.add(self.header)
 
-        cols = QHBoxLayout()
-        cols.setSpacing(14)
+        cols = self.stack_when_narrow(QHBoxLayout())
+        cols.setSpacing(16)
 
-        self.month_card = Card()
+        self.month_card = Card("Month", index=1)
         self.month_title = label("", "heading")
+        self.month_title.setFont(fonts.sans(20, 600))
         self.month_card.body.addWidget(self.month_title)
         self.heatmap = MonthHeatmap()
         self.heatmap.day_selected.connect(self._on_day)
@@ -54,23 +67,29 @@ class CalendarView(Page):
             ("best", "Busiest day"),
         ):
             box = QVBoxLayout()
-            box.setSpacing(0)
-            box.addWidget(label(caption, "caption"))
+            box.setSpacing(3)
+            box.addWidget(eyebrow(caption))
             value = label("–")
-            value.setStyleSheet("font-weight: 700; font-size: 15px;")
+            value.setFont(fonts.sans(15, 600, tabular=True))
             box.addWidget(value)
             self.stat_labels[key] = value
             stats.addLayout(box)
         stats.addStretch(1)
+        legend_row = QHBoxLayout()
+        legend_row.addStretch(1)
+        legend_row.addWidget(HeatLegend())
+        self.month_card.body.addLayout(legend_row)
+        self.month_card.body.addWidget(divider())
         self.month_card.body.addLayout(stats)
         self.month_card.body.addStretch(1)
         cols.addWidget(self.month_card, 11)
 
-        self.day_card = Card()
+        self.day_card = Card("Day", index=2)
         head = QHBoxLayout()
         names = QVBoxLayout()
         names.setSpacing(2)
         self.day_title = label("", "heading")
+        self.day_title.setFont(fonts.sans(20, 600))
         names.addWidget(self.day_title)
         self.day_sub = label("", "caption")
         names.addWidget(self.day_sub)
@@ -159,12 +178,15 @@ class CalendarView(Page):
             return
         peak = apps[0]["focused_ms"] or 1
         rows = []
-        for app in apps[:12]:
+        for rank, app in enumerate(apps[:12], start=1):
             row = AppRow(
                 app,
                 fmt.duration(app["focused_ms"], short=True),
                 app["focused_ms"] / peak,
-                sub=app.get("category") or "",
+                rank=rank,
+                tone="accent" if day == date.today() and app["app_id"] == snap.app_id else "ink",
+                dot=theme.category_color(app.get("category")),
+                sub=app.get("category") or "Uncategorized",
                 extra=f"{app['focused_ms'] / (total or 1):.0%}",
                 animate_from=self._fractions.get(app["app_id"], 0.0),
             )

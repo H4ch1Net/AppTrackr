@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 from functools import lru_cache
 from typing import Callable
 
@@ -11,6 +10,7 @@ from PySide6.QtCore import (
     QEvent,
     QFileInfo,
     QPoint,
+    QRect,
     QRectF,
     QSize,
     Qt,
@@ -20,13 +20,16 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QAbstractButton,
+    QBoxLayout,
     QButtonGroup,
     QFileIconProvider,
     QFrame,
     QGraphicsOpacityEffect,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLayout,
+    QLayoutItem,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -34,7 +37,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .. import icons, motion, theme
+from .. import fonts, icons, motion, theme
 from ..signals import bus
 
 PAGE_MARGIN = 28
@@ -46,21 +49,64 @@ MAX_CONTENT_WIDTH = 1280
 # ---------------------------------------------------------------------------
 
 
+# Type scale. Roles listed here get their font in code (QSS cannot set letter
+# spacing or OpenType features); the stylesheet only colours them.
+ROLE_FONTS: dict[str, Callable[[], QFont]] = {
+    "title": lambda: fonts.sans(24, 600),
+    "subtitle": lambda: fonts.sans(13),
+    "heading": lambda: fonts.sans(15, 600),
+    "value": lambda: fonts.sans(28, 600, tabular=True),
+    "hero": lambda: fonts.sans(44, 600, tabular=True),
+    "caption": lambda: fonts.sans(12),
+    "eyebrow": lambda: fonts.mono(10, 500, 10),
+    "eyebrowAccent": lambda: fonts.mono(10, 500, 10),
+    "tick": lambda: fonts.mono(9, 400, 4),
+    "pill": lambda: fonts.mono(9, 500, 8),
+    "pillAccent": lambda: fonts.mono(9, 500, 8),
+    "pillDanger": lambda: fonts.mono(9, 500, 8),
+}
+UPPERCASE_ROLES = {"eyebrow", "eyebrowAccent", "pill", "pillAccent", "pillDanger"}
+
+
+def _apply_role_font(widget: QWidget, role: str | None) -> None:
+    maker = ROLE_FONTS.get(role or "")
+    widget.setFont(maker() if maker else fonts.sans(13))
+
+
 def set_role(widget: QWidget, role: str | None) -> QWidget:
     widget.setProperty("role", role)
+    _apply_role_font(widget, role)
+    if isinstance(widget, QLabel) and role in UPPERCASE_ROLES:
+        widget.setText(widget.text().upper())
     widget.style().unpolish(widget)
     widget.style().polish(widget)
     return widget
 
 
+class RoleLabel(QLabel):
+    """QLabel that upper-cases its text for engraved-label roles."""
+
+    def setText(self, text: str) -> None:  # noqa: N802 - Qt naming
+        super().setText(text.upper() if self.property("role") in UPPERCASE_ROLES else text)
+
+
 def label(text: str = "", role: str | None = None, wrap: bool = False, align: Qt.AlignmentFlag | None = None) -> QLabel:
-    lbl = QLabel(text)
+    lbl = RoleLabel()
     if role:
         lbl.setProperty("role", role)
+        if role in ROLE_FONTS:
+            _apply_role_font(lbl, role)
+    lbl.setText(text)
     lbl.setWordWrap(wrap)
     if align is not None:
         lbl.setAlignment(align)
     return lbl
+
+
+def eyebrow(text: str, index: int | None = None, accent: bool = False) -> QLabel:
+    """Small engraved section label, optionally numbered ("02  TODAY BY HOUR")."""
+    shown = f"{index:02d}   {text}" if index is not None else text
+    return label(shown, "eyebrowAccent" if accent else "eyebrow")
 
 
 def button(
@@ -118,6 +164,12 @@ def divider() -> QFrame:
     return line
 
 
+def vdivider() -> QFrame:
+    line = QFrame()
+    line.setProperty("vdivider", True)
+    return line
+
+
 def clear_layout(layout: QLayout) -> None:
     while layout.count():
         item = layout.takeAt(0)
@@ -142,6 +194,7 @@ def tone_color(tone: str) -> str:
         "gold": t.gold,
         "success": t.success,
         "accent_text": t.accent_text,
+        "ink": t.ink,
     }.get(tone, tone)
 
 
@@ -175,7 +228,7 @@ class IconBinding:
 def _safe_disconnect(slot) -> None:
     try:
         bus.theme_changed.disconnect(slot)
-    except (RuntimeError, TypeError):
+    except (RuntimeError, TypeError, SystemError):
         pass
 
 
@@ -192,22 +245,31 @@ def icon_label(name: str, tone: str = "text_dim", size: int = 16, filled: bool =
 
 
 class Card(QFrame):
-    """Rounded surface with an optional header (title, caption and actions)."""
+    """Panel: hairline-bordered surface with an engraved header (index, title, caption, actions)."""
 
-    def __init__(self, title: str = "", caption: str = "", parent=None, padding: int = 18, spacing: int = 12):
+    def __init__(
+        self,
+        title: str = "",
+        caption: str = "",
+        parent=None,
+        padding: int = 18,
+        spacing: int = 12,
+        index: int | None = None,
+    ):
         super().__init__(parent)
         self.setProperty("card", True)
         self.body = QVBoxLayout(self)
-        self.body.setContentsMargins(padding, padding, padding, padding)
+        self.body.setContentsMargins(padding, padding - 2, padding, padding)
         self.body.setSpacing(spacing)
         self.header_actions = QHBoxLayout()
         self.header_actions.setSpacing(6)
         self.title_label: QLabel | None = None
         self.caption_label: QLabel | None = None
+        self._index = index
         if title:
-            self.title_label = label(title, "heading")
+            self.title_label = eyebrow(title, index)
             head = QVBoxLayout()
-            head.setSpacing(2)
+            head.setSpacing(3)
             head.addWidget(self.title_label)
             if caption:
                 self.caption_label = label(caption, "caption", wrap=True)
@@ -218,28 +280,61 @@ class Card(QFrame):
             row.addLayout(self.header_actions)
             self.body.addLayout(row)
 
+    def set_title(self, text: str) -> None:
+        if self.title_label is not None:
+            self.title_label.setText(f"{self._index:02d}   {text}" if self._index is not None else text)
+
     def set_caption(self, text: str) -> None:
         if self.caption_label is not None:
             self.caption_label.setText(text)
 
 
+class _Paper(QWidget):
+    """Page canvas: window colour with a faint graph-paper dot grid."""
+
+    STEP = 24
+
+    def paintEvent(self, event):
+        t = theme.current()
+        p = QPainter(self)
+        p.fillRect(event.rect(), QColor(t.window))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(t.grid))
+        r = event.rect()
+        step = self.STEP
+        x0 = (r.left() // step) * step + step // 2
+        y0 = (r.top() // step) * step + step // 2
+        for y in range(y0, r.bottom() + step, step):
+            for x in range(x0, r.right() + step, step):
+                p.drawRect(QRectF(x - 0.75, y - 0.75, 1.5, 1.5))
+
+
 class Page(QScrollArea):
-    """Scrollable page with consistent margins and a centered max width."""
+    """Scrollable page with consistent margins and a centered max width.
+
+    Rows registered with stack_when_narrow() switch to a vertical stack while
+    the side-by-side layout would not fit the viewport.
+    """
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWidgetResizable(True)
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        outer = QWidget()
+        self._rows: list[QBoxLayout] = []
+        self._compact = False
+        self._wide_need = 0
+        self._pending = False
+        outer = _Paper()
         outer.setObjectName("scrollContent")
+        outer.installEventFilter(self)
         outer_lay = QHBoxLayout(outer)
-        outer_lay.setContentsMargins(PAGE_MARGIN, PAGE_MARGIN - 4, PAGE_MARGIN, PAGE_MARGIN)
+        outer_lay.setContentsMargins(PAGE_MARGIN, PAGE_MARGIN - 2, PAGE_MARGIN, PAGE_MARGIN)
         self.content = QWidget()
         self.content.setMaximumWidth(MAX_CONTENT_WIDTH)
         self.layout_ = QVBoxLayout(self.content)
         self.layout_.setContentsMargins(0, 0, 0, 0)
-        self.layout_.setSpacing(18)
+        self.layout_.setSpacing(16)
         outer_lay.addWidget(self.content)
         self.setWidget(outer)
 
@@ -249,15 +344,50 @@ class Page(QScrollArea):
         else:
             self.layout_.addWidget(item, stretch)
 
+    def stack_when_narrow(self, row: QBoxLayout) -> QBoxLayout:
+        self._rows.append(row)
+        return row
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._update_compact()
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.LayoutRequest and obj is self.widget() and self._rows and not self._pending:
+            self._pending = True
+            QTimer.singleShot(0, self, self._update_compact)
+        return super().eventFilter(obj, event)
+
+    def _update_compact(self) -> None:
+        self._pending = False
+        if not self._rows:
+            return
+        available = self.viewport().width()
+        if self._compact:
+            compact = available < self._wide_need
+        else:
+            self._wide_need = self.widget().minimumSizeHint().width()
+            compact = self._wide_need > available
+        if compact != self._compact:
+            self._compact = compact
+            direction = QBoxLayout.Direction.TopToBottom if compact else QBoxLayout.Direction.LeftToRight
+            for row in self._rows:
+                row.setDirection(direction)
+
 
 class PageHeader(QWidget):
-    def __init__(self, title: str, subtitle: str = "", parent=None):
+    """Kicker (engraved context line), title, subtitle and right-aligned actions."""
+
+    def __init__(self, title: str, subtitle: str = "", parent=None, kicker: str = ""):
         super().__init__(parent)
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(0, 0, 0, 4)
+        lay.setContentsMargins(0, 0, 0, 8)
         lay.setSpacing(10)
         left = QVBoxLayout()
-        left.setSpacing(2)
+        left.setSpacing(4)
+        self.kicker = label(kicker, "eyebrowAccent")
+        self.kicker.setVisible(bool(kicker))
+        left.addWidget(self.kicker)
         self.title = label(title, "title")
         left.addWidget(self.title)
         self.subtitle = label(subtitle, "subtitle")
@@ -267,10 +397,15 @@ class PageHeader(QWidget):
         self.actions = QHBoxLayout()
         self.actions.setSpacing(8)
         lay.addLayout(self.actions)
+        lay.setAlignment(self.actions, Qt.AlignmentFlag.AlignBottom)
 
     def set_subtitle(self, text: str) -> None:
         self.subtitle.setText(text)
         self.subtitle.setVisible(bool(text))
+
+    def set_kicker(self, text: str) -> None:
+        self.kicker.setText(text)
+        self.kicker.setVisible(bool(text))
 
 
 # ---------------------------------------------------------------------------
@@ -279,21 +414,20 @@ class PageHeader(QWidget):
 
 
 class StatTile(QFrame):
-    """Compact KPI: caption with icon, large value and a secondary line."""
+    """Readout: engraved caption, large tabular value and a secondary line.
 
-    def __init__(self, caption: str, icon: str, tone: str = "accent", parent=None):
+    Framed tiles are panels of their own; unframed ones sit in a MetricGrid.
+    """
+
+    def __init__(self, caption: str, icon: str | None = None, tone: str = "accent", parent=None, framed: bool = True):
         super().__init__(parent)
-        self.setProperty("card", True)
+        self.setProperty("card" if framed else "cell", True)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(16, 14, 16, 14)
-        lay.setSpacing(4)
-        top = QHBoxLayout()
-        top.setSpacing(6)
-        top.addWidget(icon_label(icon, tone, 14))
-        self.caption = label(caption, "caption")
-        top.addWidget(self.caption, 1)
-        lay.addLayout(top)
+        lay.setContentsMargins(18, 14, 18, 16)
+        lay.setSpacing(6)
+        self.caption = eyebrow(caption)
+        lay.addWidget(self.caption)
         self.value = label("–", "value")
         lay.addWidget(self.value)
         self.sub = label("", "caption")
@@ -355,6 +489,30 @@ class StatTile(QFrame):
             self._count(0.0, self._number)
 
 
+class MetricGrid(QFrame):
+    """One panel holding readouts in a grid separated by hairlines."""
+
+    def __init__(self, tiles: list[StatTile], columns: int = 2, parent=None):
+        super().__init__(parent)
+        self.setProperty("card", True)
+        grid = QGridLayout(self)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setSpacing(0)
+        rows = (len(tiles) + columns - 1) // columns
+        for i, tile in enumerate(tiles):
+            r, c = divmod(i, columns)
+            grid.addWidget(tile, r * 2, c * 2)
+            if c < columns - 1:
+                line = vdivider()
+                grid.addWidget(line, r * 2, c * 2 + 1)
+            if r < rows - 1:
+                grid.addWidget(divider(), r * 2 + 1, c * 2)
+                if c < columns - 1:
+                    grid.addWidget(divider(), r * 2 + 1, c * 2 + 1)
+        for c in range(columns):
+            grid.setColumnStretch(c * 2, 1)
+
+
 @lru_cache(maxsize=256)
 def _file_icon(path: str, size: int) -> QPixmap:
     try:
@@ -385,19 +543,14 @@ class AppAvatar(QWidget):
         if not self._pixmap.isNull():
             p.drawPixmap(self.rect(), self._pixmap)
             return
-        digest = int(hashlib.md5(self._name.lower().encode()).hexdigest()[:6], 16)
-        dark = theme.current().dark
-        bg = QColor.fromHsl(digest % 360, 110 if dark else 150, 70 if dark else 215)
-        fg = QColor.fromHsl(digest % 360, 160, 205 if dark else 70)
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(bg)
-        radius = self._size * 0.28
-        p.drawRoundedRect(QRectF(0, 0, self._size, self._size), radius, radius)
-        font = QFont(self.font())
-        font.setPixelSize(int(self._size * 0.46))
-        font.setBold(True)
-        p.setFont(font)
-        p.setPen(fg)
+        # Neutral monogram plate: calm, consistent, never a random colour.
+        t = theme.current()
+        radius = max(3.0, self._size * 0.16)
+        p.setPen(QPen(QColor(t.border_strong), 1))
+        p.setBrush(QColor(t.surface_alt))
+        p.drawRoundedRect(QRectF(0.5, 0.5, self._size - 1, self._size - 1), radius, radius)
+        p.setFont(fonts.mono(int(self._size * 0.42), 500, 0))
+        p.setPen(QColor(t.text_dim))
         p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self._name.strip()[:1].upper())
 
 
@@ -418,7 +571,7 @@ class UsageBar(QWidget):
         self._tone = tone
         self._marker = marker
         self._pending = animate_from is not None and abs(animate_from - fraction) > 0.001
-        self.setFixedHeight(6)
+        self.setFixedHeight(10)
         self.setMinimumWidth(60)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
@@ -446,17 +599,100 @@ class UsageBar(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         p.setPen(Qt.PenStyle.NoPen)
-        h = self.height()
+        h, y = 4.0, (self.height() - 4) / 2
         p.setBrush(QColor(t.track))
-        p.drawRoundedRect(QRectF(0, 0, self.width(), h), h / 2, h / 2)
+        p.drawRoundedRect(QRectF(0, y, self.width(), h), 2, 2)
         frac = max(0.0, min(1.0, self._fraction))
         if frac > 0:
             p.setBrush(QColor(tone_color(self._tone)))
-            p.drawRoundedRect(QRectF(0, 0, max(h, self.width() * frac), h), h / 2, h / 2)
+            p.drawRoundedRect(QRectF(0, y, max(h, self.width() * frac), h), 2, 2)
         if self._marker is not None and 0 < self._marker < 1:
             x = self.width() * self._marker
-            p.setPen(QPen(QColor(t.text_dim), 2))
-            p.drawLine(int(x), 0, int(x), h)
+            p.setBrush(QColor(t.text_dim))
+            p.drawRect(QRectF(x - 1, 0, 2, self.height()))
+
+
+class Swatch(QWidget):
+    """Small square colour key (category identity next to its label)."""
+
+    def __init__(self, color: str, size: int = 8, parent=None):
+        super().__init__(parent)
+        self._color = color
+        self.setFixedSize(size, size)
+
+    def paintEvent(self, _event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(self._color))
+        p.drawRoundedRect(QRectF(self.rect()), 1.5, 1.5)
+
+
+def legend_item(color: str, text: str) -> QWidget:
+    """Swatch plus caption, kept together when a legend wraps."""
+    host = QWidget()
+    row = QHBoxLayout(host)
+    row.setContentsMargins(0, 0, 0, 0)
+    row.setSpacing(6)
+    row.addWidget(Swatch(color, 8))
+    row.addWidget(label(text, "caption"))
+    return host
+
+
+class FlowLayout(QLayout):
+    """Left-to-right layout that wraps onto new lines (legends, chips)."""
+
+    def __init__(self, parent: QWidget | None = None, h_spacing: int = 16, v_spacing: int = 6):
+        super().__init__(parent)
+        self._items: list[QLayoutItem] = []
+        self._h, self._v = h_spacing, v_spacing
+        self.setContentsMargins(0, 0, 0, 0)
+
+    def addItem(self, item: QLayoutItem) -> None:
+        self._items.append(item)
+
+    def count(self) -> int:
+        return len(self._items)
+
+    def itemAt(self, index: int) -> QLayoutItem | None:
+        return self._items[index] if 0 <= index < len(self._items) else None
+
+    def takeAt(self, index: int) -> QLayoutItem | None:
+        return self._items.pop(index) if 0 <= index < len(self._items) else None
+
+    def expandingDirections(self) -> Qt.Orientation:
+        return Qt.Orientation(0)
+
+    def hasHeightForWidth(self) -> bool:
+        return True
+
+    def heightForWidth(self, width: int) -> int:
+        return self._arrange(QRect(0, 0, width, 0), apply=False)
+
+    def setGeometry(self, rect: QRect) -> None:
+        super().setGeometry(rect)
+        self._arrange(rect, apply=True)
+
+    def sizeHint(self) -> QSize:
+        return self.minimumSize()
+
+    def minimumSize(self) -> QSize:
+        size = QSize()
+        for item in self._items:
+            size = size.expandedTo(item.minimumSize())
+        return size
+
+    def _arrange(self, rect: QRect, apply: bool) -> int:
+        x, y, line = rect.x(), rect.y(), 0
+        for item in self._items:
+            hint = item.sizeHint()
+            if x > rect.x() and x + hint.width() > rect.right() + 1:
+                x, y, line = rect.x(), y + line + self._v, 0
+            if apply:
+                item.setGeometry(QRect(QPoint(x, y), hint))
+            x += hint.width() + self._h
+            line = max(line, hint.height())
+        return y + line - rect.y()
 
 
 class AppRow(QFrame):
@@ -471,10 +707,12 @@ class AppRow(QFrame):
         value: str,
         fraction: float,
         sub: str = "",
-        tone: str = "accent",
+        tone: str = "ink",
         extra: str = "",
         marker: float | None = None,
         animate_from: float | None = None,
+        rank: int | None = None,
+        dot: str | None = None,
         parent=None,
     ):
         super().__init__(parent)
@@ -485,27 +723,36 @@ class AppRow(QFrame):
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setAccessibleName(f"{app.get('name', '')}, {value}")
         self.setToolTip(f"{app.get('name', '')}: {value}" + (f" ({sub})" if sub else ""))
-        self.setMinimumHeight(48)
+        self.setMinimumHeight(46)
 
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(10, 6, 12, 6)
+        lay.setContentsMargins(8, 6, 10, 6)
         lay.setSpacing(12)
+        if rank is not None:
+            num = label(f"{rank:02d}", "tick")
+            num.setFixedWidth(18)
+            lay.addWidget(num)
         lay.addWidget(AppAvatar(app.get("name", ""), app.get("icon_path"), 28))
 
         text = QVBoxLayout()
         text.setContentsMargins(0, 0, 0, 0)
-        text.setSpacing(0)
+        text.setSpacing(1)
         name_row = QHBoxLayout()
         name_row.setSpacing(6)
         name = label(app.get("name", ""))
-        name.setStyleSheet("font-weight: 600;")
+        name.setFont(fonts.sans(13, 600))
         name_row.addWidget(name)
         if app.get("is_favorite"):
             name_row.addWidget(icon_label("star", "gold", 12, filled=True))
         name_row.addStretch(1)
         text.addLayout(name_row)
         if sub:
-            text.addWidget(label(sub, "caption"))
+            sub_row = QHBoxLayout()
+            sub_row.setSpacing(6)
+            if dot:
+                sub_row.addWidget(Swatch(dot, 6))
+            sub_row.addWidget(label(sub, "caption"), 1)
+            text.addLayout(sub_row)
         holder = QWidget()
         holder.setLayout(text)
         holder.setMinimumWidth(120)
@@ -520,13 +767,12 @@ class AppRow(QFrame):
             "danger" if tone == "danger" else None,
             align=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
         )
-        if tone != "danger":
-            val.setStyleSheet("font-weight: 600;")
+        val.setFont(fonts.sans(13, 600, tabular=True))
         val.setMinimumWidth(70)
         lay.addWidget(val)
         if extra:
-            ex = label(extra, "caption", align=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            ex.setMinimumWidth(38)
+            ex = label(extra, "tick", align=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            ex.setMinimumWidth(34)
             lay.addWidget(ex)
 
     def mouseReleaseEvent(self, event):
@@ -581,25 +827,66 @@ class AppRow(QFrame):
         super().paintEvent(event)
 
 
+ILLUSTRATIONS = {
+    "calendar-days": "calendar",
+    "search": "search",
+    "layout-grid": "search",
+    "star": "star",
+    "mouse-pointer-click": "clicks",
+    "power": "unplugged",
+    "gift": "gift",
+    "zap": "waiting",
+    "clock": "waiting",
+    "castle": "blueprint",
+}
+
+
+class Illustration(QLabel):
+    """Hairline line-art that re-tints itself with the theme."""
+
+    def __init__(self, name: str, width: int = 120, parent=None):
+        super().__init__(parent)
+        self._name = name
+        self._width = width
+        self.setFixedSize(width, int(width * 0.8))
+
+        def apply():
+            t = theme.current()
+            try:
+                self.setPixmap(icons.illustration(name, t.text_dim, t.accent, t.border, width))
+            except RuntimeError:
+                pass
+
+        apply()
+        self._apply = apply
+        bus.theme_changed.connect(apply)
+        self.destroyed.connect(lambda *_: _safe_disconnect(apply))
+
+
 class EmptyState(QWidget):
+    """Illustration, title, explanation and an optional next step."""
+
     def __init__(
         self, icon: str, title: str, message: str = "", action: str = "", on_action: Callable | None = None, parent=None
     ):
         super().__init__(parent)
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(16, 28, 16, 28)
+        lay.setContentsMargins(16, 20, 16, 24)
         lay.setSpacing(6)
         lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        ic = icon_label(icon, "text_muted", 28)
-        lay.addWidget(ic, 0, Qt.AlignmentFlag.AlignHCenter)
-        lay.addSpacing(4)
+        art = ILLUSTRATIONS.get(icon)
+        if art:
+            lay.addWidget(Illustration(art, 110), 0, Qt.AlignmentFlag.AlignHCenter)
+        else:
+            lay.addWidget(icon_label(icon, "text_muted", 28), 0, Qt.AlignmentFlag.AlignHCenter)
+        lay.addSpacing(2)
         lay.addWidget(label(title, "heading", align=Qt.AlignmentFlag.AlignCenter))
         if message:
             msg = label(message, "dim", wrap=True, align=Qt.AlignmentFlag.AlignCenter)
-            msg.setMaximumWidth(420)
+            msg.setMaximumWidth(400)
             lay.addWidget(msg, 0, Qt.AlignmentFlag.AlignHCenter)
         if action and on_action:
-            lay.addSpacing(6)
+            lay.addSpacing(8)
             lay.addWidget(button(action, on_click=on_action), 0, Qt.AlignmentFlag.AlignHCenter)
 
 
@@ -709,8 +996,8 @@ class Toggle(QAbstractButton):
         t = theme.current()
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        r = QRectF(1, 1, 38, 20)
-        off, on = QColor(t.border_strong), QColor(t.accent)
+        r = QRectF(1, 2, 38, 18)
+        off, on = QColor(t.border_strong), QColor(t.text)
         track = QColor(
             int(off.red() + (on.red() - off.red()) * self._knob),
             int(off.green() + (on.green() - off.green()) * self._knob),
@@ -720,11 +1007,12 @@ class Toggle(QAbstractButton):
             track.setAlphaF(0.4)
         p.setPen(QPen(QColor(t.accent), 2) if self.hasFocus() else Qt.PenStyle.NoPen)
         p.setBrush(track)
-        p.drawRoundedRect(r, 10, 10)
+        p.drawRoundedRect(r, 4, 4)
         p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor(t.on_accent if self._knob > 0.5 else "#ffffff"))
-        x = 4 + self._knob * 18
-        p.drawEllipse(QRectF(x, 4, 14, 14))
+        knob = QColor(t.window) if self._knob > 0.5 else QColor(t.text_dim if t.dark else "#ffffff")
+        p.setBrush(knob)
+        x = 4 + self._knob * 20
+        p.drawRoundedRect(QRectF(x, 5, 12, 12), 2.5, 2.5)
 
 
 class SettingRow(QWidget):
@@ -738,7 +1026,7 @@ class SettingRow(QWidget):
         text = QVBoxLayout()
         text.setSpacing(2)
         t = label(title)
-        t.setStyleSheet("font-weight: 600;")
+        t.setFont(fonts.sans(13, 600))
         text.addWidget(t)
         if description:
             text.addWidget(label(description, "caption", wrap=True))
@@ -832,10 +1120,68 @@ class Badge(QLabel):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("navBadge")
-        self.setFixedHeight(18)
+        self.setFont(fonts.mono(9, 500, 0))
+        self.setFixedHeight(16)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.hide()
 
     def set_count(self, n: int) -> None:
         self.setText(str(n) if n < 100 else "99+")
         self.setVisible(n > 0)
+
+
+class StatusModule(QAbstractButton):
+    """Sidebar recorder module: live dot, state, current app and session clock."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+        self.setFixedHeight(60)
+        self._head, self._name, self._clock, self._tone, self._live = "", "", "", "text_muted", False
+        self._hover = False
+        self.pulse = motion.PulseDot(5, self)
+        self.pulse.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.pulse.move(10, 9)
+
+    def set_status(self, head: str, name: str, clock: str, tone: str, live: bool) -> None:
+        self._head, self._name, self._clock, self._tone, self._live = head, name, clock, tone, live
+        self.pulse.set_state(live, tone_color(tone))
+        self.setAccessibleName(f"{head}: {name} {clock}".strip())
+        self.update()
+
+    def enterEvent(self, event):
+        self._hover = True
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._hover = False
+        self.update()
+        super().leaveEvent(event)
+
+    def paintEvent(self, _event):
+        t = theme.current()
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        edge = t.accent if self.hasFocus() else (t.text_muted if self._hover else t.border)
+        p.setPen(QPen(QColor(edge), 1))
+        p.setBrush(QColor(t.surface))
+        p.drawRoundedRect(QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5), theme.RADIUS_PANEL, theme.RADIUS_PANEL)
+        if not self._live:
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(tone_color(self._tone)))
+            p.drawRoundedRect(QRectF(16, 16, 8, 8), 1.5, 1.5)
+        p.setFont(fonts.mono(9, 500, 10))
+        p.setPen(QColor(tone_color("accent_text" if self._live else self._tone)))
+        p.drawText(QRectF(32, 10, self.width() - 40, 16), Qt.AlignmentFlag.AlignVCenter, self._head.upper())
+        p.setPen(QColor(t.text_dim))
+        p.drawText(
+            QRectF(32, 10, self.width() - 44, 16),
+            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight,
+            self._clock,
+        )
+        p.setFont(fonts.sans(13, 600))
+        p.setPen(QColor(t.text))
+        name = p.fontMetrics().elidedText(self._name, Qt.TextElideMode.ElideRight, self.width() - 26)
+        p.drawText(QRectF(14, 30, self.width() - 26, 20), Qt.AlignmentFlag.AlignVCenter, name)

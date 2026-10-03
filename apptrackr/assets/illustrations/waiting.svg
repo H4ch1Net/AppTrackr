@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="120" height="96" viewBox="0 0 120 96" fill="none" stroke-linecap="round" stroke-linejoin="round"><line x1="14" y1="86" x2="106" y2="86" stroke="FAINT" stroke-width="1.5"/>
+<circle cx="60" cy="48" r="30" fill="FAINT" fill-opacity="0.35" stroke="INK" stroke-width="1.5"/>
+<line x1="60.0" y1="27.0" x2="60.0" y2="21.0" stroke="INK" stroke-width="1.5"/><line x1="72.0" y1="27.2" x2="73.5" y2="24.6" stroke="INK" stroke-width="1.5"/><line x1="80.8" y1="36.0" x2="83.4" y2="34.5" stroke="INK" stroke-width="1.5"/><line x1="81.0" y1="48.0" x2="87.0" y2="48.0" stroke="INK" stroke-width="1.5"/><line x1="80.8" y1="60.0" x2="83.4" y2="61.5" stroke="INK" stroke-width="1.5"/><line x1="72.0" y1="68.8" x2="73.5" y2="71.4" stroke="INK" stroke-width="1.5"/><line x1="60.0" y1="69.0" x2="60.0" y2="75.0" stroke="INK" stroke-width="1.5"/><line x1="48.0" y1="68.8" x2="46.5" y2="71.4" stroke="INK" stroke-width="1.5"/><line x1="39.2" y1="60.0" x2="36.6" y2="61.5" stroke="INK" stroke-width="1.5"/><line x1="39.0" y1="48.0" x2="33.0" y2="48.0" stroke="INK" stroke-width="1.5"/><line x1="39.2" y1="36.0" x2="36.6" y2="34.5" stroke="INK" stroke-width="1.5"/><line x1="48.0" y1="27.2" x2="46.5" y2="24.6" stroke="INK" stroke-width="1.5"/>
+<path d="M60.0 30.0 A18 18 0 0 1 76.9 41.8" stroke="ACCENT" stroke-width="3"/>
+<line x1="60" y1="48" x2="60" y2="30" stroke="INK" stroke-width="1.5"/>
+<line x1="60" y1="48" x2="72" y2="55" stroke="ACCENT" stroke-width="1.5"/>
+<circle cx="60" cy="48" r="2.2" fill="INK"/>
+<rect x="55" y="11" width="10" height="5" rx="1.5" stroke="INK" stroke-width="1.5"/>
+<line x1="60" y1="16" x2="60" y2="18" stroke="INK" stroke-width="1.5"/>
+<line x1="83" y1="24" x2="86" y2="21" stroke="INK" stroke-width="1.5"/>
+</svg>

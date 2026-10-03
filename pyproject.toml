@@ -44,7 +44,13 @@ version = { attr = "apptrackr.__version__" }
 include = ["apptrackr*"]
 
 [tool.setuptools.package-data]
-apptrackr = ["data/schema.sql", "assets/*.svg", "assets/icons/*"]
+apptrackr = [
+    "data/schema.sql",
+    "assets/*.svg",
+    "assets/icons/*",
+    "assets/illustrations/*",
+    "assets/fonts/*",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
