@@ -34,14 +34,6 @@ def ensure_app_rules(app_id: int) -> None:
     db.commit()
 
 
-def list_rules(app_id: int | None = None) -> list[dict]:
-    if app_id is None:
-        rows = db.fetchall("SELECT * FROM reward_rules ORDER BY app_id, metric, threshold")
-    else:
-        rows = db.fetchall("SELECT * FROM reward_rules WHERE app_id = ? ORDER BY metric, threshold", (app_id,))
-    return [dict(r) | {"reward": json.loads(r["reward_json"])} for r in rows]
-
-
 def enable_app_rewards(app_id: int, enabled: bool = True) -> None:
     ensure_app_rules(app_id)
     db.execute("UPDATE reward_rules SET enabled = ? WHERE app_id = ?", (int(enabled), app_id))

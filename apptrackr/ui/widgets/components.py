@@ -104,34 +104,6 @@ def clear_layout(layout: QLayout) -> None:
             clear_layout(item.layout())
 
 
-def hbox(*items, spacing: int = 8, margins: tuple[int, int, int, int] = (0, 0, 0, 0)) -> QHBoxLayout:
-    lay = QHBoxLayout()
-    lay.setSpacing(spacing)
-    lay.setContentsMargins(*margins)
-    for item in items:
-        if item is None:
-            lay.addStretch(1)
-        elif isinstance(item, QLayout):
-            lay.addLayout(item)
-        else:
-            lay.addWidget(item)
-    return lay
-
-
-def vbox(*items, spacing: int = 8, margins: tuple[int, int, int, int] = (0, 0, 0, 0)) -> QVBoxLayout:
-    lay = QVBoxLayout()
-    lay.setSpacing(spacing)
-    lay.setContentsMargins(*margins)
-    for item in items:
-        if item is None:
-            lay.addStretch(1)
-        elif isinstance(item, QLayout):
-            lay.addLayout(item)
-        else:
-            lay.addWidget(item)
-    return lay
-
-
 def tone_color(tone: str) -> str:
     t = theme.current()
     return {

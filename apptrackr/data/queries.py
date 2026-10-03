@@ -82,19 +82,6 @@ def get_app(app_id: int) -> dict | None:
     return app
 
 
-def list_apps(include_hidden: bool = False) -> list[dict]:
-    sql = "SELECT * FROM apps" + ("" if include_hidden else " WHERE is_hidden = 0")
-    apps = []
-    for r in db.fetchall(sql):
-        app = dict(r)
-        if not catalog.is_listable(app["exe_name"]):
-            continue
-        app["name"] = catalog.display_name(app)
-        apps.append(app)
-    apps.sort(key=lambda a: a["name"].lower())
-    return apps
-
-
 def hidden_apps() -> list[dict]:
     rows = db.fetchall("SELECT * FROM apps WHERE is_hidden = 1")
     apps = [dict(r) | {"name": catalog.display_name(dict(r))} for r in rows]

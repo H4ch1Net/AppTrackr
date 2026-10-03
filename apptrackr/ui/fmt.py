@@ -36,10 +36,6 @@ def clock(ms: int | float) -> str:
     return f"{hours}:{minutes:02d}:{seconds:02d}" if hours else f"{minutes}:{seconds:02d}"
 
 
-def hours_decimal(ms: int | float) -> str:
-    return f"{ms / 3_600_000:.1f}h"
-
-
 def percent_change(current: float, previous: float) -> str | None:
     if previous <= 0:
         return None

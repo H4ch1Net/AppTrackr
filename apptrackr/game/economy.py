@@ -36,11 +36,6 @@ def level_for_xp(xp: int) -> int:
     return 1 + max(0, xp) // XP_PER_LEVEL
 
 
-def xp_for_level(level: int) -> int:
-    """Total XP needed to reach *level*."""
-    return (max(1, level) - 1) * XP_PER_LEVEL
-
-
 def level_progress(xp: int) -> tuple[int, int]:
     """(XP earned inside the current level, XP the level requires)."""
     return max(0, xp) % XP_PER_LEVEL, XP_PER_LEVEL
