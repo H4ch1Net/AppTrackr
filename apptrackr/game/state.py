@@ -1,115 +1,152 @@
-"""Neon Village game state and economy."""
+"""Neon Village: buildings, inventory and the credit market."""
 
 from __future__ import annotations
 
 import json
 
 from ..data import db
+from . import economy
 
-# Building definitions: name → {cost, unlock_level, bonus_description}
 BUILDINGS = {
-    "workshop":  {"wood": 20, "stone": 10, "unlock_level": 1, "max_level": 5,
-                  "desc": "Produces bonus XP (+5% per level)"},
-    "storage":   {"wood": 15, "stone": 15, "unlock_level": 1, "max_level": 5,
-                  "desc": "Increases resource cap (+50 per level)"},
-    "house":     {"wood": 25, "food": 10, "unlock_level": 2, "max_level": 5,
-                  "desc": "Adds +1 villager per level"},
-    "lab":       {"stone": 20, "metal": 15, "blueprints": 1, "unlock_level": 3, "max_level": 3,
-                  "desc": "Unlocks advanced reward tiers"},
-    "tavern":    {"wood": 30, "food": 20, "unlock_level": 4, "max_level": 3,
-                  "desc": "Streak bonuses +10% per level"},
-    "monument":  {"stone": 50, "metal": 30, "blueprints": 3, "unlock_level": 5, "max_level": 1,
-                  "desc": "Prestige! Cosmetic crown effect"},
+    "workshop": {
+        "wood": 20,
+        "stone": 10,
+        "unlock_level": 1,
+        "max_level": 5,
+        "desc": f"+{economy.WORKSHOP_XP_PCT}% XP from rewards per level",
+    },
+    "storage": {
+        "wood": 15,
+        "stone": 15,
+        "unlock_level": 1,
+        "max_level": 5,
+        "desc": f"+{economy.STORAGE_CAP_PER_LEVEL} resource capacity per level",
+    },
+    "house": {"wood": 25, "food": 10, "unlock_level": 2, "max_level": 5, "desc": "+1 villager per level"},
+    "lab": {
+        "stone": 20,
+        "metal": 15,
+        "blueprints": 1,
+        "unlock_level": 3,
+        "max_level": 3,
+        "desc": f"+{economy.LAB_RESOURCE_PCT}% resources from rewards per level",
+    },
+    "tavern": {
+        "wood": 30,
+        "food": 20,
+        "unlock_level": 4,
+        "max_level": 3,
+        "desc": f"+{economy.TAVERN_STREAK_PCT}% streak rewards per level",
+    },
+    "monument": {
+        "stone": 50,
+        "metal": 30,
+        "blueprints": 3,
+        "unlock_level": 5,
+        "max_level": 1,
+        "desc": "Prestige crown on your profile",
+    },
 }
 
 
 def get_village() -> dict:
     row = db.fetchone("SELECT state_json FROM village_state WHERE profile_id = 1")
-    if row:
-        return json.loads(row["state_json"])
-    return {"buildings": {}, "villagers": 0, "inventory": {
-        "wood": 0, "stone": 0, "metal": 0, "food": 0, "blueprints": 0
-    }}
+    state = json.loads(row["state_json"]) if row else {}
+    state.setdefault("buildings", {})
+    state.setdefault("villagers", 0)
+    inv = state.setdefault("inventory", {})
+    for r in economy.RESOURCES:
+        inv.setdefault(r, 0)
+    return state
 
 
-def _save_village(state: dict) -> None:
-    db.execute("UPDATE village_state SET state_json = ? WHERE profile_id = 1",
-               (json.dumps(state),))
-    db.commit()
+def save_village(state: dict) -> None:
+    db.execute("UPDATE village_state SET state_json = ? WHERE profile_id = 1", (json.dumps(state),))
 
 
-def can_build(building_name: str) -> tuple[bool, str]:
-    """Check if player can build/upgrade a building. Returns (ok, reason)."""
-    if building_name not in BUILDINGS:
+def building_level(village: dict, name: str) -> int:
+    return int(village.get("buildings", {}).get(name, {}).get("level", 0))
+
+
+def resource_cap(village: dict | None = None) -> int:
+    village = village or get_village()
+    return economy.resource_cap(building_level(village, "storage"))
+
+
+def build_cost(name: str, current_level: int) -> dict[str, int]:
+    spec = BUILDINGS[name]
+    mult = current_level + 1
+    return {r: spec[r] * mult for r in economy.RESOURCES if spec.get(r)}
+
+
+def _player_level() -> int:
+    row = db.fetchone("SELECT level FROM player_profile WHERE profile_id = 1")
+    return row["level"] if row else 1
+
+
+def can_build(name: str) -> tuple[bool, str]:
+    """Check whether a building can be built or upgraded. Returns (ok, reason)."""
+    if name not in BUILDINGS:
         return False, "Unknown building"
-
-    spec = BUILDINGS[building_name]
-    profile = db.fetchone("SELECT level FROM player_profile WHERE profile_id = 1")
-    if not profile or profile["level"] < spec["unlock_level"]:
-        return False, f"Requires player level {spec['unlock_level']}"
-
+    spec = BUILDINGS[name]
+    if _player_level() < spec["unlock_level"]:
+        return False, f"Unlocks at level {spec['unlock_level']}"
     village = get_village()
-    current_level = village["buildings"].get(building_name, {}).get("level", 0)
-    if current_level >= spec["max_level"]:
-        return False, "Already at max level"
-
-    inv = village.get("inventory", {})
-    cost_mult = current_level + 1  # Cost scales with level
-    for resource in ("wood", "stone", "metal", "food", "blueprints"):
-        needed = spec.get(resource, 0) * cost_mult
-        if inv.get(resource, 0) < needed:
-            return False, f"Not enough {resource} (need {needed}, have {inv.get(resource, 0)})"
-
-    return True, "OK"
+    level = building_level(village, name)
+    if level >= spec["max_level"]:
+        return False, "Max level"
+    inv = village["inventory"]
+    missing = [f"{need - inv.get(r, 0)} {r}" for r, need in build_cost(name, level).items() if inv.get(r, 0) < need]
+    if missing:
+        return False, "Need " + ", ".join(missing)
+    return True, "Ready"
 
 
-def build_or_upgrade(building_name: str) -> tuple[bool, str]:
-    """Attempt to build or upgrade a building. Returns (success, message)."""
-    ok, reason = can_build(building_name)
+def build_or_upgrade(name: str) -> tuple[bool, str]:
+    ok, reason = can_build(name)
     if not ok:
         return False, reason
-
-    spec = BUILDINGS[building_name]
     village = get_village()
-    current_level = village["buildings"].get(building_name, {}).get("level", 0)
-    cost_mult = current_level + 1
-
-    # Deduct resources
-    inv = village.get("inventory", {})
-    for resource in ("wood", "stone", "metal", "food", "blueprints"):
-        needed = spec.get(resource, 0) * cost_mult
-        if needed > 0:
-            inv[resource] = inv.get(resource, 0) - needed
-
-    # Upgrade building
-    village["buildings"][building_name] = {"level": current_level + 1}
-
-    # House gives villagers
-    if building_name == "house":
+    level = building_level(village, name)
+    for r, need in build_cost(name, level).items():
+        village["inventory"][r] -= need
+    village["buildings"][name] = {"level": level + 1}
+    if name == "house":
         village["villagers"] = village.get("villagers", 0) + 1
+    save_village(village)
+    db.commit()
+    verb = "built" if level == 0 else f"upgraded to level {level + 1}"
+    return True, f"{name.title()} {verb}"
 
-    village["inventory"] = inv
-    _save_village(village)
-    return True, f"{building_name.title()} upgraded to level {current_level + 1}!"
+
+def buy(resource: str) -> tuple[bool, str]:
+    """Spend credits on a bundle of *resource* at the market."""
+    if resource not in economy.MARKET:
+        return False, "Not for sale"
+    amount, price = economy.MARKET[resource]
+    profile = db.fetchone("SELECT credits FROM player_profile WHERE profile_id = 1")
+    credits = profile["credits"] if profile else 0
+    if credits < price:
+        return False, f"Need {price - credits} more credits"
+    village = get_village()
+    cap = resource_cap(village)
+    have = village["inventory"].get(resource, 0)
+    if have >= cap:
+        return False, f"{resource.title()} storage is full"
+    village["inventory"][resource] = min(cap, have + amount)
+    save_village(village)
+    db.execute("UPDATE player_profile SET credits = credits - ? WHERE profile_id = 1", (price,))
+    db.commit()
+    return True, f"Bought {amount} {resource}"
 
 
 def get_bonuses() -> dict:
-    """Calculate active bonuses from buildings."""
     village = get_village()
-    buildings = village.get("buildings", {})
-    bonuses = {
-        "xp_bonus_pct": 0,
-        "resource_cap_bonus": 0,
-        "streak_bonus_pct": 0,
+    return {
+        "xp_bonus_pct": building_level(village, "workshop") * economy.WORKSHOP_XP_PCT,
+        "resource_bonus_pct": building_level(village, "lab") * economy.LAB_RESOURCE_PCT,
+        "streak_bonus_pct": building_level(village, "tavern") * economy.TAVERN_STREAK_PCT,
+        "resource_cap": resource_cap(village),
         "villagers": village.get("villagers", 0),
-        "has_monument": False,
+        "has_monument": building_level(village, "monument") >= 1,
     }
-    if "workshop" in buildings:
-        bonuses["xp_bonus_pct"] = buildings["workshop"].get("level", 0) * 5
-    if "storage" in buildings:
-        bonuses["resource_cap_bonus"] = buildings["storage"].get("level", 0) * 50
-    if "tavern" in buildings:
-        bonuses["streak_bonus_pct"] = buildings["tavern"].get("level", 0) * 10
-    if "monument" in buildings:
-        bonuses["has_monument"] = buildings["monument"].get("level", 0) >= 1
-    return bonuses

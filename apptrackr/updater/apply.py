@@ -1,33 +1,61 @@
-"""Apply downloaded updates."""
+"""Download and launch an installer."""
 
 from __future__ import annotations
 
 import logging
-import os
 import subprocess
 import sys
 import tempfile
+import threading
 from pathlib import Path
-from urllib.request import urlopen, Request
+from typing import Callable
+from urllib.request import Request, urlopen
+
+from .. import __version__
 
 log = logging.getLogger(__name__)
 
 
-def download_and_apply(url: str) -> str | None:
-    """Download installer from *url* and launch it, then exit the current app."""
-    if not url:
-        return None
+class DownloadCancelled(Exception):
+    pass
+
+
+def download(
+    url: str,
+    progress: Callable[[int, int], None] | None = None,
+    cancel: threading.Event | None = None,
+    dest_dir: Path | None = None,
+) -> Path:
+    """Stream *url* to a temp file, reporting (received, total) bytes."""
+    dest = (dest_dir or Path(tempfile.gettempdir())) / "AppTrackr_Setup.exe"
+    partial = dest.with_suffix(".part")
+    req = Request(url, headers={"User-Agent": f"AppTrackr/{__version__}"})
     try:
-        req = Request(url)
-        with urlopen(req, timeout=120) as resp:  # noqa: S310 — URL comes from configured update manifest
-            data = resp.read()
+        with urlopen(req, timeout=60) as resp, open(partial, "wb") as out:  # noqa: S310
+            total = int(resp.headers.get("Content-Length") or 0)
+            received = 0
+            while True:
+                if cancel is not None and cancel.is_set():
+                    raise DownloadCancelled()
+                chunk = resp.read(256 * 1024)
+                if not chunk:
+                    break
+                out.write(chunk)
+                received += len(chunk)
+                if progress:
+                    progress(received, total)
+        if total and received != total:
+            raise OSError(f"Download incomplete ({received} of {total} bytes)")
+    except BaseException:
+        partial.unlink(missing_ok=True)
+        raise
+    partial.replace(dest)
+    return dest
 
-        tmp = Path(tempfile.gettempdir()) / "apptrackr_update.exe"
-        tmp.write_bytes(data)
 
-        # Launch installer and exit
-        subprocess.Popen([str(tmp)], creationflags=subprocess.DETACHED_PROCESS)  # noqa: S603
-        return str(tmp)
-    except Exception:
-        log.exception("Failed to download/apply update")
-        return None
+def launch_installer(path: Path) -> None:
+    """Start the installer detached from this process."""
+    flags = 0
+    if sys.platform.startswith("win"):
+        flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
+    subprocess.Popen([str(path)], creationflags=flags, close_fds=True)  # noqa: S603

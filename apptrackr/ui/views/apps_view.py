@@ -1,133 +1,223 @@
-"""Apps list view – sort by most/least used, most opened, most clicked."""
+"""Apps: every tracked app for a period, sortable, searchable and filterable."""
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QComboBox,
-    QScrollArea, QTabBar, QPushButton,
+from PySide6.QtCore import QTimer
+from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLineEdit, QPushButton, QVBoxLayout
+
+from ...data import db, queries
+from .. import fmt, icons
+from ..signals import bus
+from ..widgets.components import (
+    AppRow,
+    Card,
+    EmptyState,
+    IconBinding,
+    Page,
+    PageHeader,
+    SegmentedControl,
+    button,
+    clear_layout,
+    label,
+    tone_color,
 )
 
-from .. import theme
-from ..widgets.components import AppRow
-from ...data import queries
+PERIODS = (("Today", 0), ("Last 7 days", 6), ("Last 30 days", 29), ("Last 90 days", 89), ("All time", None))
+SORTS = (
+    ("Most used", queries.SORT_FOCUSED),
+    ("Least used", queries.SORT_LEAST),
+    ("Most launched", queries.SORT_OPENS),
+    ("Most clicked", queries.SORT_CLICKS),
+)
 
 
-class AppsView(QWidget):
-    """Apps list with sort tabs, search, and filter."""
-
-    app_selected = Signal(int)
-
-    def __init__(self, parent=None):
+class AppsView(Page):
+    def __init__(self, ctx, parent=None):
         super().__init__(parent)
-        self._current_tab = 0
-        self._search_text = ""
-        self._build_ui()
-        self.refresh()
+        self.setObjectName("page")
+        self.ctx = ctx
 
-    def _build_ui(self):
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 24, 24, 24)
-        layout.setSpacing(16)
+        self.header = PageHeader("Apps")
+        self.add(self.header)
 
-        header = QLabel("Apps")
-        header.setObjectName("heading")
-        layout.addWidget(header)
+        bar = QHBoxLayout()
+        bar.setSpacing(8)
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Search apps  (Ctrl+F)")
+        self.search.setClearButtonEnabled(True)
+        self.search.setAccessibleName("Search apps")
+        self._search_action = self.search.addAction(
+            icons.icon("search", tone_color("text_muted")), QLineEdit.ActionPosition.LeadingPosition
+        )
+        bus.theme_changed.connect(lambda: self._search_action.setIcon(icons.icon("search", tone_color("text_muted"))))
+        self._debounce = QTimer(self)
+        self._debounce.setSingleShot(True)
+        self._debounce.setInterval(150)
+        self._debounce.timeout.connect(self.refresh)
+        self.search.textChanged.connect(lambda *_: self._debounce.start())
+        bar.addWidget(self.search, 1)
 
-        # Tabs
-        tab_row = QHBoxLayout()
-        self._tabs = QTabBar()
-        self._tabs.addTab("Most Used")
-        self._tabs.addTab("Least Used")
-        self._tabs.addTab("Most Opened")
-        self._tabs.addTab("Most Clicked")
-        self._tabs.addTab("Favorites")
-        self._tabs.currentChanged.connect(self._on_tab_change)
-        tab_row.addWidget(self._tabs)
-        tab_row.addStretch()
-        layout.addLayout(tab_row)
+        self.period = QComboBox()
+        self.period.setAccessibleName("Period")
+        for text, _ in PERIODS:
+            self.period.addItem(text)
+        self.period.setCurrentIndex(1)
+        self.period.currentIndexChanged.connect(lambda *_: self.refresh())
+        bar.addWidget(self.period)
 
-        # Search + period
-        filter_row = QHBoxLayout()
-        self._search = QLineEdit()
-        self._search.setPlaceholderText("Search apps...")
-        self._search.textChanged.connect(self._on_search)
-        filter_row.addWidget(self._search, stretch=1)
+        self.category = QComboBox()
+        self.category.setAccessibleName("Category")
+        self.category.addItem("All categories", None)
+        for cat in queries.CATEGORIES:
+            self.category.addItem(cat, cat)
+        self.category.currentIndexChanged.connect(lambda *_: self.refresh())
+        bar.addWidget(self.category)
 
-        self._period = QComboBox()
-        self._period.addItems(["7 Days", "30 Days", "90 Days", "All Time"])
-        self._period.currentIndexChanged.connect(lambda _: self.refresh())
-        filter_row.addWidget(self._period)
-        layout.addLayout(filter_row)
+        self.favorites = QPushButton("Favorites")
+        self.favorites.setCheckable(True)
+        self.favorites.setProperty("kind", "ghost")
+        self.favorites.setToolTip("Show only favorite apps")
+        IconBinding.attach(self.favorites, "star", "text_dim", checked_tone="gold")
+        self.favorites.toggled.connect(lambda *_: self.refresh())
+        bar.addWidget(self.favorites)
+        self.add(bar)
 
-        # Apps list
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
-        self._list_container = QWidget()
-        self._list_container.setStyleSheet("background: transparent;")
-        self._list_layout = QVBoxLayout(self._list_container)
-        self._list_layout.setContentsMargins(0, 0, 0, 0)
-        self._list_layout.setSpacing(6)
-        self._list_layout.addStretch()
-        scroll.setWidget(self._list_container)
-        layout.addWidget(scroll, stretch=1)
+        self.sort = SegmentedControl([s[0] for s in SORTS])
+        self.sort.changed.connect(lambda *_: self.refresh())
+        sort_row = QHBoxLayout()
+        sort_row.addWidget(self.sort)
+        sort_row.addStretch(1)
+        self.summary = label("", "caption")
+        sort_row.addWidget(self.summary)
+        self.add(sort_row)
 
-    def refresh(self):
-        days_map = {0: 7, 1: 30, 2: 90, 3: 3650}
-        days = days_map.get(self._period.currentIndex(), 7)
+        self.card = Card(padding=8, spacing=2)
+        self.list = QVBoxLayout()
+        self.list.setSpacing(2)
+        self.card.body.addLayout(self.list)
+        self.add(self.card)
 
-        tab = self._tabs.currentIndex()
-        if tab == 0:
-            apps = queries.most_used(days=days)
-        elif tab == 1:
-            apps = queries.least_used(days=days)
-        elif tab == 2:
-            apps = queries.most_opened(days=days)
-        elif tab == 3:
-            apps = queries.most_clicked(days=days)
-        elif tab == 4:
-            all_apps = queries.most_used(days=days, limit=200)
-            apps = [a for a in all_apps if a.get("is_favorite")]
-        else:
-            apps = []
+        self.hidden_note = button("", kind="link", on_click=lambda: ctx.navigate("settings"))
+        self.add(self.hidden_note)
+        self.layout_.addStretch(1)
 
-        # Filter by search
-        if self._search_text:
-            q = self._search_text.lower()
-            apps = [a for a in apps if q in (a.get("display_name") or a["exe_name"]).lower()]
+        bus.data_changed.connect(lambda: self.isVisible() and self.refresh())
 
-        self._rebuild_list(apps)
+    def focus_search(self) -> None:
+        self.search.setFocus()
+        self.search.selectAll()
 
-    def _rebuild_list(self, apps: list[dict]):
-        while self._list_layout.count() > 1:
-            item = self._list_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+    def set_period(self, index: int) -> None:
+        self.period.setCurrentIndex(index)
 
+    def refresh(self) -> None:
+        _label, days = PERIODS[self.period.currentIndex()]
+        end = queries.today_str()
+        start = queries.days_ago(days) if days is not None else "0000-01-01"
+        sort = SORTS[self.sort.current()][1]
+        apps = queries.top_apps(
+            start,
+            end,
+            sort=sort,
+            limit=None,
+            category=self.category.currentData(),
+            favorites_only=self.favorites.isChecked(),
+            search=self.search.text(),
+        )
+
+        total_ms = sum(a["focused_ms"] for a in apps)
+        count = len(apps)
+        self.header.set_subtitle(
+            f"{count} app{'s' if count != 1 else ''} · {fmt.duration(total_ms, short=True)} "
+            f"focused · {PERIODS[self.period.currentIndex()][0].lower()}"
+        )
+        self.summary.setText("Right-click an app for quick actions")
+
+        clear_layout(self.list)
         if not apps:
-            lbl = QLabel("No apps found")
-            lbl.setStyleSheet(f"color: {theme.TEXT_MUTED}; padding: 20px; background: transparent;")
-            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            self._list_layout.insertWidget(0, lbl)
-            return
+            self.list.addWidget(self._empty_state(sort))
+        else:
+            metric = {queries.SORT_OPENS: "opens_count", queries.SORT_CLICKS: "clicks_count"}.get(sort, "focused_ms")
+            peak = max(a[metric] for a in apps) or 1
+            for app in apps:
+                self.list.addWidget(self._row(app, sort, metric, peak, total_ms))
 
-        max_ms = max(a.get("focused_ms", 1) for a in apps) or 1
-        for i, app in enumerate(apps):
-            row = AppRow(
-                app_id=app["app_id"],
-                name=app.get("display_name") or app["exe_name"],
-                value_ms=app.get("focused_ms", 0),
-                max_ms=max_ms,
-                is_favorite=bool(app.get("is_favorite")),
+        hidden = len(queries.hidden_apps())
+        self.hidden_note.setText(f"{hidden} excluded app{'s are' if hidden != 1 else ' is'} hidden. Manage in Settings")
+        self.hidden_note.setVisible(hidden > 0)
+
+    def _row(self, app: dict, sort: str, metric: str, peak: int, total_ms: int) -> AppRow:
+        opens = app["opens_count"]
+        launches = f"{opens} launch{'es' if opens != 1 else ''}"
+        if sort == queries.SORT_OPENS:
+            value = launches
+            sub = fmt.duration(app["focused_ms"], short=True) + " focused"
+        elif sort == queries.SORT_CLICKS:
+            value = f"{fmt.count(app['clicks_count'])} clicks"
+            sub = fmt.duration(app["focused_ms"], short=True) + " focused"
+        else:
+            value = fmt.duration(app["focused_ms"], short=True)
+            days = app.get("active_days") or 0
+            sub = " · ".join(
+                filter(
+                    None,
+                    [
+                        app.get("category"),
+                        launches if opens else "",
+                        f"{days} active day{'s' if days != 1 else ''}" if days > 1 else "",
+                    ],
+                )
             )
-            row.clicked.connect(self.app_selected.emit)
-            self._list_layout.insertWidget(i, row)
+        extra = f"{app['focused_ms'] / total_ms:.0%}" if total_ms and metric == "focused_ms" else ""
+        row = AppRow(
+            app,
+            value,
+            app[metric] / peak
+            if sort != queries.SORT_LEAST
+            else app["focused_ms"] / max(1, max(peak, app["focused_ms"])),
+            sub=sub,
+            extra=extra,
+        )
+        row.clicked.connect(self.ctx.open_app)
+        row.context_requested.connect(self.ctx.app_menu)
+        return row
 
-    def _on_tab_change(self, idx):
-        self._current_tab = idx
-        self.refresh()
-
-    def _on_search(self, text):
-        self._search_text = text
-        self.refresh()
+    def _empty_state(self, sort: str) -> EmptyState:
+        if self.search.text().strip():
+            return EmptyState(
+                "search",
+                f"No apps match “{self.search.text().strip()}”",
+                "Try a different name or clear the filters.",
+                "Clear search",
+                lambda: self.search.clear(),
+            )
+        if sort == queries.SORT_CLICKS and not db.get_bool("track_clicks"):
+            return EmptyState(
+                "mouse-pointer-click",
+                "Click counting is off",
+                "Turn it on in Settings to see which apps you click the most.",
+                "Open Settings",
+                lambda: self.ctx.navigate("settings"),
+            )
+        if self.favorites.isChecked():
+            return EmptyState(
+                "star",
+                "No favorites in this period",
+                "Mark apps as favorites from their detail page or the right-click menu. "
+                "Favorites also drive your daily streak.",
+            )
+        if self.category.currentData():
+            return EmptyState(
+                "layout-grid",
+                f"No {self.category.currentText()} apps in this period",
+                "Assign categories from an app's detail page.",
+            )
+        if not self.ctx.tracker.supported and not queries.first_tracked_day():
+            return EmptyState(
+                "power",
+                "Nothing tracked on this platform",
+                "Foreground tracking runs on Windows. Start with --demo to explore sample data.",
+            )
+        return EmptyState(
+            "layout-grid", "No apps tracked in this period", "Use your computer as usual and apps will appear here."
+        )

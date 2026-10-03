@@ -1,337 +1,528 @@
-"""Settings view – idle, privacy, autostart, export."""
+"""Settings. Every control applies immediately."""
 
 from __future__ import annotations
 
-import os
 import sys
+import threading
+import time
+from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QObject, QSize, Qt, QUrl, Signal
+from PySide6.QtGui import QColor, QDesktopServices, QPainter, QPen
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QSpinBox, QCheckBox, QFrame, QFileDialog, QMessageBox, QLineEdit,
-    QComboBox, QScrollArea,
+    QAbstractButton,
+    QButtonGroup,
+    QComboBox,
+    QFileDialog,
+    QGridLayout,
+    QHBoxLayout,
+    QLineEdit,
+    QMessageBox,
+    QProgressDialog,
+    QWidget,
 )
 
-from .. import theme
-from ..widgets.components import NeonCard
-from ...data import db, export
-from ...updater import check as updater_check
+from ... import APP_NAME, REPO_URL, __version__
+from ...core import autostart
+from ...data import db, export, queries
 from ...updater import apply as updater_apply
+from ...updater import check as updater
+from .. import fmt, theme
+from ..signals import bus, run_async
+from ..widgets.components import (
+    Card,
+    Page,
+    PageHeader,
+    SegmentedControl,
+    SettingRow,
+    Toggle,
+    button,
+    clear_layout,
+    divider,
+    label,
+)
+
+IDLE_CHOICES = (
+    ("Never", 0),
+    ("1 minute", 60),
+    ("2 minutes", 120),
+    ("3 minutes", 180),
+    ("5 minutes", 300),
+    ("10 minutes", 600),
+    ("15 minutes", 900),
+    ("30 minutes", 1800),
+)
+SHORTCUTS = (
+    ("Ctrl+1 … Ctrl+5", "Switch page"),
+    ("Ctrl+,", "Settings"),
+    ("Ctrl+F", "Search apps"),
+    ("Ctrl+Shift+P", "Pause or resume tracking"),
+    ("Esc / Alt+Left", "Back from an app"),
+    ("F5", "Refresh"),
+    ("Ctrl+Q", "Quit"),
+)
 
 
-class SettingsView(QWidget):
-    """Application settings panel."""
+class _ProgressRelay(QObject):
+    progress = Signal(int, int)
 
-    def __init__(self, tracker=None, parent=None):
+
+class Swatch(QAbstractButton):
+    """Round accent color picker button."""
+
+    def __init__(self, name: str, color: str, parent=None):
         super().__init__(parent)
-        self._tracker = tracker
-        self._build_ui()
-        self._load()
+        self.name = name
+        self.color = color
+        self.setCheckable(True)
+        self.setToolTip(name)
+        self.setAccessibleName(f"{name} accent")
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
 
-    def _build_ui(self):
-        root_layout = QVBoxLayout(self)
-        root_layout.setContentsMargins(0, 0, 0, 0)
-        root_layout.setSpacing(0)
+    def sizeHint(self) -> QSize:
+        return QSize(28, 28)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        root_layout.addWidget(scroll)
+    def paintEvent(self, _event):
+        t = theme.current()
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        if self.isChecked() or self.hasFocus():
+            p.setPen(QPen(QColor(t.text), 2))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawEllipse(1, 1, 26, 26)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(self.color))
+        p.drawEllipse(5, 5, 18, 18)
 
-        content = QWidget()
-        scroll.setWidget(content)
 
-        layout = QVBoxLayout(content)
-        layout.setContentsMargins(24, 24, 24, 24)
-        layout.setSpacing(16)
+class SettingsView(Page):
+    def __init__(self, ctx, parent=None):
+        super().__init__(parent)
+        self.setObjectName("page")
+        self.ctx = ctx
+        self.add(PageHeader("Settings", "Changes are saved automatically."))
 
-        header = QLabel("Settings")
-        header.setObjectName("heading")
-        layout.addWidget(header)
+        self.update_banner = Card(padding=14)
+        self.update_banner.setProperty("card", False)
+        self.update_banner.setProperty("banner", True)
+        banner_row = QHBoxLayout()
+        self.update_text = label("", wrap=True)
+        banner_row.addWidget(self.update_text, 1)
+        self.update_btn = button("Download and install", kind="primary", on_click=self._install_update)
+        banner_row.addWidget(self.update_btn)
+        self.update_banner.body.addLayout(banner_row)
+        self.update_banner.hide()
+        self.add(self.update_banner)
 
-        # -- Tracking --
-        track_card = NeonCard(glow_color=theme.BG_CARD, title="TRACKING")
-        tl = track_card.content_layout()
+        self._build_general()
+        self._build_tracking()
+        self._build_appearance()
+        self._build_data()
+        self._build_updates()
+        self._build_about()
+        self.layout_.addStretch(1)
 
-        # Idle threshold
-        idle_row = QHBoxLayout()
-        idle_row.setSpacing(16)
-        idle_lbl = QLabel("Idle threshold (seconds):")
-        idle_lbl.setStyleSheet("background: transparent;")
-        idle_row.addWidget(idle_lbl)
-        self._idle_spin = QSpinBox()
-        self._idle_spin.setRange(0, 3600)
-        self._idle_spin.setSingleStep(30)
-        self._idle_spin.setFixedWidth(100)
-        self._idle_spin.setToolTip("0 = disabled")
-        idle_row.addWidget(self._idle_spin)
-        idle_row.addStretch()
-        tl.addLayout(idle_row)
+    # ------------------------------------------------------------------
+    # Sections
+    # ------------------------------------------------------------------
 
-        # Polling rate
-        poll_row = QHBoxLayout()
-        poll_row.setSpacing(16)
-        poll_lbl = QLabel("Polling rate (Hz):")
-        poll_lbl.setStyleSheet("background: transparent;")
-        poll_row.addWidget(poll_lbl)
-        self._poll_spin = QSpinBox()
-        self._poll_spin.setRange(1, 10)
-        self._poll_spin.setFixedWidth(100)
-        poll_row.addWidget(self._poll_spin)
-        poll_row.addStretch()
-        tl.addLayout(poll_row)
+    def _build_general(self) -> None:
+        card = Card("General")
+        self.autostart = Toggle()
+        self.autostart.toggled.connect(self._set_autostart)
+        desc = "Starts in the tray when you sign in to Windows."
+        if not autostart.supported():
+            desc = "Available on Windows."
+            self.autostart.setEnabled(False)
+        card.body.addWidget(SettingRow("Launch at startup", desc, self.autostart))
+        card.body.addWidget(divider())
+        self.tray = Toggle()
+        self.tray.toggled.connect(lambda on: self._save("minimize_to_tray", on, "Close behavior updated"))
+        card.body.addWidget(
+            SettingRow(
+                "Keep running when closed",
+                "Closing the window hides it to the system tray so tracking continues.",
+                self.tray,
+            )
+        )
+        card.body.addWidget(divider())
+        self.notifications = Toggle()
+        self.notifications.toggled.connect(lambda on: self._save("notifications_enabled", on))
+        card.body.addWidget(
+            SettingRow(
+                "Notifications", "Daily limits, streaks and updates while the window is hidden.", self.notifications
+            )
+        )
+        card.body.addWidget(divider())
+        self.rewards = Toggle()
+        self.rewards.toggled.connect(self._set_rewards)
+        card.body.addWidget(
+            SettingRow(
+                "Rewards and village",
+                "XP, levels and the Neon Village game. Turning this off hides both pages; nothing is deleted.",
+                self.rewards,
+            )
+        )
+        self.add(card)
 
-        layout.addWidget(track_card)
+    def _build_tracking(self) -> None:
+        card = Card("Tracking")
+        self.idle = QComboBox()
+        for text, sec in IDLE_CHOICES:
+            self.idle.addItem(text, sec)
+        self.idle.currentIndexChanged.connect(self._set_idle)
+        card.body.addWidget(
+            SettingRow(
+                "Idle timeout",
+                "Stop counting after this long without keyboard or mouse "
+                "input. Time up to your last input still counts.",
+                self.idle,
+            )
+        )
+        card.body.addWidget(divider())
+        self.clicks = Toggle()
+        self.clicks.toggled.connect(self._set_clicks)
+        card.body.addWidget(
+            SettingRow(
+                "Count mouse clicks",
+                "Stores a click count per app per day. Positions, buttons and keystrokes are never recorded.",
+                self.clicks,
+            )
+        )
+        card.body.addWidget(divider())
+        card.body.addWidget(
+            SettingRow(
+                "Excluded apps",
+                "Excluded apps are not tracked and are hidden everywhere. Right-click any app to exclude it.",
+            )
+        )
+        self.excluded = QGridLayout()
+        self.excluded.setHorizontalSpacing(10)
+        self.excluded.setVerticalSpacing(4)
+        card.body.addLayout(self.excluded)
+        self.add(card)
 
-        # -- Privacy --
-        privacy_card = NeonCard(glow_color=theme.BG_CARD, title="PRIVACY")
-        pl = privacy_card.content_layout()
+    def _build_appearance(self) -> None:
+        card = Card("Appearance")
+        self.mode = SegmentedControl(["Dark", "Light", "System"])
+        self.mode.changed.connect(self._set_mode)
+        card.body.addWidget(SettingRow("Theme", "", self.mode))
+        card.body.addWidget(divider())
+        swatches = QWidget()
+        lay = QHBoxLayout(swatches)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(2)
+        self.swatch_group = QButtonGroup(self)
+        self.swatches: dict[str, Swatch] = {}
+        for name, color in theme.ACCENTS.items():
+            sw = Swatch(name, color)
+            self.swatch_group.addButton(sw)
+            self.swatches[name] = sw
+            sw.clicked.connect(lambda _=False, n=name: self._set_accent(n))
+            lay.addWidget(sw)
+        card.body.addWidget(SettingRow("Accent color", "", swatches))
+        self.add(card)
 
-        self._title_check = QCheckBox("Track window titles (hashed)")
-        pl.addWidget(self._title_check)
+    def _build_data(self) -> None:
+        card = Card("Data", "Usage is stored only on this computer.")
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        row.addWidget(button("Export CSV", icon="download", on_click=lambda: self._export("csv")))
+        row.addWidget(button("Export JSON", icon="download", on_click=lambda: self._export("json")))
+        row.addWidget(button("Back up…", icon="database", on_click=self._backup))
+        row.addWidget(button("Restore…", icon="archive-restore", on_click=self._restore))
+        row.addStretch(1)
+        row.addWidget(button("Open data folder", kind="ghost", icon="folder-open", on_click=self._open_folder))
+        card.body.addLayout(row)
+        self.db_path = label("", "caption")
+        self.db_path.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        card.body.addWidget(self.db_path)
+        self.add(card)
 
-        self._click_check = QCheckBox("Track mouse clicks (count only)")
-        pl.addWidget(self._click_check)
+    def _build_updates(self) -> None:
+        card = Card("Updates")
+        self.auto_update = Toggle()
+        self.auto_update.toggled.connect(lambda on: self._save("auto_update_check", on))
+        card.body.addWidget(
+            SettingRow(
+                "Check for updates automatically",
+                "Asks GitHub for the latest release once a day. Nothing else is sent.",
+                self.auto_update,
+            )
+        )
+        card.body.addWidget(divider())
+        check_row = QHBoxLayout()
+        self.version_label = label(f"{APP_NAME} {__version__}")
+        self.version_label.setStyleSheet("font-weight: 600;")
+        check_row.addWidget(self.version_label)
+        self.update_status = label("", "caption")
+        check_row.addWidget(self.update_status, 1)
+        self.check_btn = button("Check now", icon="refresh-cw", on_click=self._check_updates)
+        check_row.addWidget(self.check_btn)
+        card.body.addLayout(check_row)
+        self.feed = QLineEdit()
+        self.feed.setPlaceholderText(updater.DEFAULT_UPDATE_URL)
+        self.feed.setAccessibleName("Update feed URL")
+        self.feed.editingFinished.connect(lambda: self._save("update_url", self.feed.text().strip()))
+        card.body.addWidget(
+            SettingRow("Release feed", "GitHub releases API URL. Leave empty for the official releases.", None)
+        )
+        card.body.addWidget(self.feed)
+        self.add(card)
 
-        layout.addWidget(privacy_card)
+    def _build_about(self) -> None:
+        card = Card("About")
+        links = QHBoxLayout()
+        links.setSpacing(16)
+        for text, url in (
+            ("Source code", REPO_URL),
+            ("Report an issue", REPO_URL + "/issues"),
+            ("Releases", REPO_URL + "/releases"),
+            ("License (MIT)", REPO_URL + "/blob/main/LICENSE"),
+        ):
+            links.addWidget(button(text, kind="link", on_click=lambda u=url: QDesktopServices.openUrl(QUrl(u))))
+        links.addStretch(1)
+        card.body.addLayout(links)
+        card.body.addWidget(label("KEYBOARD SHORTCUTS", "section"))
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(14)
+        grid.setVerticalSpacing(6)
+        for i, (keys, action) in enumerate(SHORTCUTS):
+            k = label(keys)
+            k.setObjectName("kbd")
+            grid.addWidget(k, i // 2, (i % 2) * 2, Qt.AlignmentFlag.AlignLeft)
+            grid.addWidget(label(action, "dim"), i // 2, (i % 2) * 2 + 1)
+        grid.setColumnStretch(1, 1)
+        grid.setColumnStretch(3, 1)
+        card.body.addLayout(grid)
+        self.add(card)
 
-        # -- System --
-        sys_card = NeonCard(glow_color=theme.BG_CARD, title="SYSTEM")
-        sl = sys_card.content_layout()
+    # ------------------------------------------------------------------
+    # Load
+    # ------------------------------------------------------------------
 
-        self._autostart_check = QCheckBox("Launch on system startup")
-        sl.addWidget(self._autostart_check)
+    def refresh(self) -> None:
+        self.autostart.set_silently(autostart.is_enabled())
+        self.tray.set_silently(db.get_bool("minimize_to_tray", True))
+        self.notifications.set_silently(db.get_bool("notifications_enabled", True))
+        self.rewards.set_silently(db.get_bool("rewards_enabled", True))
+        self.clicks.set_silently(db.get_bool("track_clicks"))
+        self.auto_update.set_silently(db.get_bool("auto_update_check", True))
+        self.feed.setText(db.get_setting("update_url", ""))
 
-        self._tray_check = QCheckBox("Minimize to system tray")
-        sl.addWidget(self._tray_check)
+        idle = db.get_int("idle_threshold_sec", 300)
+        idx = self.idle.findData(idle)
+        if idx < 0:
+            self.idle.addItem(fmt.duration(idle * 1000), idle)
+            idx = self.idle.count() - 1
+        self.idle.blockSignals(True)
+        self.idle.setCurrentIndex(idx)
+        self.idle.blockSignals(False)
 
-        self._rewards_check = QCheckBox("Enable rewards system")
-        sl.addWidget(self._rewards_check)
+        self.mode.set_current(theme.MODES.index(theme.mode()))
+        self.swatches[theme.accent_name()].setChecked(True)
+        self.db_path.setText(f"Database: {db.db_path()}")
+        self._fill_excluded()
 
-        layout.addWidget(sys_card)
+        info = self.ctx.update_info
+        self.update_banner.setVisible(info is not None)
+        if info:
+            self.update_text.setText(f"<b>{APP_NAME} {info.version} is available.</b> You have {__version__}.")
+            self.update_btn.setVisible(bool(info.download_url) and sys.platform.startswith("win"))
 
-        # -- Data --
-        data_card = NeonCard(glow_color=theme.BG_CARD, title="DATA")
-        dl = data_card.content_layout()
+    def _fill_excluded(self) -> None:
+        clear_layout(self.excluded)
+        hidden = queries.hidden_apps()
+        if not hidden:
+            self.excluded.addWidget(label("No excluded apps.", "muted"), 0, 0)
+            return
+        for i, app in enumerate(hidden):
+            self.excluded.addWidget(label(app["name"]), i, 0)
+            self.excluded.addWidget(label(app["exe_name"], "caption"), i, 1)
+            self.excluded.addWidget(button("Track again", kind="ghost", on_click=lambda a=app: self._include(a)), i, 2)
+        self.excluded.setColumnStretch(1, 1)
 
-        btn_row = QHBoxLayout()
-        export_csv_btn = QPushButton("Export CSV")
-        export_csv_btn.clicked.connect(self._export_csv)
-        btn_row.addWidget(export_csv_btn)
+    # ------------------------------------------------------------------
+    # Handlers
+    # ------------------------------------------------------------------
 
-        export_json_btn = QPushButton("Export JSON")
-        export_json_btn.clicked.connect(self._export_json)
-        btn_row.addWidget(export_json_btn)
+    def _save(self, key: str, value, message: str = "Saved") -> None:
+        db.set_setting(key, value)
+        self.ctx.toast(message)
 
-        backup_btn = QPushButton("Backup Database")
-        backup_btn.clicked.connect(self._backup)
-        btn_row.addWidget(backup_btn)
+    def _set_autostart(self, on: bool) -> None:
+        if autostart.set_enabled(on):
+            self.ctx.toast("AppTrackr will start when you sign in" if on else "Launch at startup turned off")
+        else:
+            self.autostart.set_silently(autostart.is_enabled())
+            self.ctx.toast("Could not change the startup setting", "danger")
 
-        restore_btn = QPushButton("Restore Backup")
-        restore_btn.clicked.connect(self._restore)
-        btn_row.addWidget(restore_btn)
+    def _set_rewards(self, on: bool) -> None:
+        db.set_setting("rewards_enabled", on)
+        self.ctx.window.apply_rewards_visibility()
+        self.ctx.toast("Rewards turned on" if on else "Rewards turned off")
 
-        btn_row.addStretch()
-        dl.addLayout(btn_row)
+    def _set_idle(self) -> None:
+        sec = self.idle.currentData()
+        db.set_setting("idle_threshold_sec", sec)
+        self.ctx.tracker.reload_settings()
+        self.ctx.toast("Idle detection off" if not sec else f"Idle after {self.idle.currentText()}")
 
-        # DB location
-        db_path = QLabel(f"DB: {db._db_path()}")
-        db_path.setStyleSheet(f"color: {theme.TEXT_MUTED}; font-size: 11px; background: transparent;")
-        dl.addWidget(db_path)
+    def _set_clicks(self, on: bool) -> None:
+        db.set_setting("track_clicks", on)
+        if self.ctx.clicks is not None:
+            self.ctx.clicks.set_enabled(on)
+        self.ctx.toast("Click counting on" if on else "Click counting off")
 
-        layout.addWidget(data_card)
+    def _set_mode(self, index: int) -> None:
+        db.set_setting("ui_mode", theme.MODES[index])
+        self.ctx.window.apply_theme()
 
-        # -- Appearance --
-        appearance_card = NeonCard(glow_color=theme.BG_CARD, title="APPEARANCE")
-        al = appearance_card.content_layout()
+    def _set_accent(self, name: str) -> None:
+        db.set_setting("ui_theme", name)
+        self.ctx.window.apply_theme()
 
-        theme_row = QHBoxLayout()
-        theme_row.setSpacing(16)
-        theme_lbl = QLabel("Theme Color:")
-        theme_lbl.setStyleSheet("background: transparent;")
-        theme_row.addWidget(theme_lbl)
-        self._theme_combo = QComboBox()
-        self._theme_combo.addItems(list(theme.THEME_PRESETS.keys()))
-        self._theme_combo.setFixedWidth(150)
-        theme_row.addWidget(self._theme_combo)
-        theme_row.addStretch()
-        al.addLayout(theme_row)
+    def _include(self, app: dict) -> None:
+        queries.set_hidden(app["app_id"], False)
+        self.ctx.tracker.reload_settings()
+        bus.data_changed.emit()
+        self._fill_excluded()
+        self.ctx.toast(f"{app['name']} is tracked again")
 
-        theme_note = QLabel("Changes apply after restart")
-        theme_note.setStyleSheet(f"color: {theme.TEXT_MUTED}; font-size: 11px; background: transparent;")
-        al.addWidget(theme_note)
+    # Data ----------------------------------------------------------------
 
-        layout.addWidget(appearance_card)
-
-        # -- Updates --
-        updates_card = NeonCard(glow_color=theme.BG_CARD, title="UPDATES")
-        ul = updates_card.content_layout()
-
-        self._auto_update_check = QCheckBox("Automatically check for updates on startup")
-        ul.addWidget(self._auto_update_check)
-
-        url_row = QHBoxLayout()
-        url_row.setSpacing(16)
-        url_lbl = QLabel("Update feed URL:")
-        url_lbl.setStyleSheet("background: transparent;")
-        url_row.addWidget(url_lbl)
-        self._update_url_edit = QLineEdit()
-        self._update_url_edit.setPlaceholderText("https://api.github.com/repos/<owner>/<repo>/releases/latest")
-        url_row.addWidget(self._update_url_edit, stretch=1)
-        ul.addLayout(url_row)
-
-        update_actions = QHBoxLayout()
-        check_btn = QPushButton("Check for Updates")
-        check_btn.clicked.connect(self._check_for_updates)
-        update_actions.addWidget(check_btn)
-        update_actions.addStretch()
-        ul.addLayout(update_actions)
-
-        update_note = QLabel("If an update is found, AppTrackr can download and launch the new installer.")
-        update_note.setWordWrap(True)
-        update_note.setStyleSheet(f"color: {theme.TEXT_MUTED}; font-size: 11px; background: transparent;")
-        ul.addWidget(update_note)
-
-        layout.addWidget(updates_card)
-
-        # Save button
-        save_row = QHBoxLayout()
-        save_btn = QPushButton("Save Settings")
-        save_btn.setObjectName("primary")
-        save_btn.clicked.connect(self._save)
-        save_row.addWidget(save_btn)
-        save_row.addStretch()
-        layout.addLayout(save_row)
-
-        layout.addStretch()
-
-    def _load(self):
-        self._idle_spin.setValue(int(db.get_setting("idle_threshold_sec", "300")))
-        self._poll_spin.setValue(int(db.get_setting("polling_hz", "4")))
-        self._title_check.setChecked(db.get_setting("track_window_titles", "0") == "1")
-        self._click_check.setChecked(db.get_setting("track_clicks", "0") == "1")
-        self._autostart_check.setChecked(db.get_setting("autostart", "0") == "1")
-        self._tray_check.setChecked(db.get_setting("minimize_to_tray", "1") == "1")
-        self._rewards_check.setChecked(db.get_setting("rewards_enabled", "1") == "1")
-        self._auto_update_check.setChecked(db.get_setting("auto_update_check", "1") == "1")
-        self._update_url_edit.setText(db.get_setting("update_url", ""))
-        
-        # Theme
-        current_theme = db.get_setting("ui_theme", "Cyan")
-        idx = self._theme_combo.findText(current_theme)
-        if idx >= 0:
-            self._theme_combo.setCurrentIndex(idx)
-
-    def _save(self):
-        db.set_setting("idle_threshold_sec", str(self._idle_spin.value()))
-        db.set_setting("polling_hz", str(self._poll_spin.value()))
-        db.set_setting("track_window_titles", "1" if self._title_check.isChecked() else "0")
-        db.set_setting("track_clicks", "1" if self._click_check.isChecked() else "0")
-        db.set_setting("autostart", "1" if self._autostart_check.isChecked() else "0")
-        db.set_setting("minimize_to_tray", "1" if self._tray_check.isChecked() else "0")
-        db.set_setting("rewards_enabled", "1" if self._rewards_check.isChecked() else "0")
-        db.set_setting("ui_theme", self._theme_combo.currentText())
-        db.set_setting("auto_update_check", "1" if self._auto_update_check.isChecked() else "0")
-        db.set_setting("update_url", self._update_url_edit.text().strip())
-
-        # Apply autostart
-        self._apply_autostart(self._autostart_check.isChecked())
-
-        if self._tracker:
-            self._tracker.reload_settings()
-
-        QMessageBox.information(self, "Settings", "Settings saved.")
-
-    def _apply_autostart(self, enable: bool):
-        """Set or remove autostart via Windows registry."""
+    def _export(self, kind: str) -> None:
+        default = f"apptrackr-{queries.today_str()}.{kind}"
+        path, _ = QFileDialog.getSaveFileName(
+            self, f"Export {kind.upper()}", default, "CSV (*.csv)" if kind == "csv" else "JSON (*.json)"
+        )
+        if not path:
+            return
         try:
-            import winreg
-            key = winreg.OpenKey(
-                winreg.HKEY_CURRENT_USER,
-                r"Software\Microsoft\Windows\CurrentVersion\Run",
-                0, winreg.KEY_SET_VALUE,
-            )
-            if enable:
-                exe = sys.executable
-                if getattr(sys, "frozen", False):
-                    cmd = f'"{exe}"'
-                else:
-                    cmd = f'"{exe}" -m apptrackr'
-                winreg.SetValueEx(key, "AppTrackr", 0, winreg.REG_SZ, cmd)
-            else:
-                try:
-                    winreg.DeleteValue(key, "AppTrackr")
-                except FileNotFoundError:
-                    pass
-            winreg.CloseKey(key)
-        except Exception:
-            pass
-
-    def _export_csv(self):
-        path, _ = QFileDialog.getSaveFileName(self, "Export CSV", "apptrackr_export.csv", "CSV (*.csv)")
-        if path:
-            export.export_csv(path)
-            QMessageBox.information(self, "Export", f"Exported to {path}")
-
-    def _export_json(self):
-        path, _ = QFileDialog.getSaveFileName(self, "Export JSON", "apptrackr_export.json", "JSON (*.json)")
-        if path:
-            export.export_json(path)
-            QMessageBox.information(self, "Export", f"Exported to {path}")
-
-    def _backup(self):
-        path, _ = QFileDialog.getSaveFileName(self, "Backup Database", "apptrackr_backup.sqlite", "SQLite (*.sqlite)")
-        if path:
-            export.backup_db(path)
-            QMessageBox.information(self, "Backup", f"Backed up to {path}")
-
-    def _restore(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Restore Backup", "", "SQLite (*.sqlite)")
-        if path:
-            reply = QMessageBox.warning(
-                self, "Restore",
-                "This will replace your current data. The app will restart. Continue?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            )
-            if reply == QMessageBox.StandardButton.Yes:
-                export.restore_db(path)
-                QMessageBox.information(self, "Restore", "Restored. Please restart the app.")
-
-    def _check_for_updates(self):
-        update_url = self._update_url_edit.text().strip() or db.get_setting("update_url", "")
-        if not update_url:
-            QMessageBox.information(
-                self,
-                "Updates",
-                "Set an Update feed URL first.\n\n"
-                "Example:\nhttps://api.github.com/repos/<owner>/<repo>/releases/latest",
-            )
+            n = export.export_csv(path) if kind == "csv" else export.export_json(path)
+        except OSError as exc:
+            QMessageBox.warning(self, "Export failed", str(exc))
             return
+        self.ctx.toast(
+            f"Exported {n:,} rows",
+            action="Show",
+            callback=lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(path).parent))),
+        )
 
-        info = updater_check.check_for_update(update_url)
-        if not info:
-            QMessageBox.information(self, "Updates", "You're up to date.")
-            return
-
-        version = info.get("version", "unknown")
-        url = info.get("url", "")
-        if not url:
-            QMessageBox.information(self, "Updates", f"Update v{version} found, but no installer asset was published.")
-            return
-
-        reply = QMessageBox.question(
+    def _backup(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(
             self,
-            "Update Available",
-            f"AppTrackr v{version} is available. Download and launch installer now?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            "Back up database",
+            f"apptrackr-backup-{queries.today_str()}.sqlite",
+            "SQLite database (*.sqlite *.db)",
+        )
+        if not path:
+            return
+        try:
+            export.backup_db(path)
+        except Exception as exc:
+            QMessageBox.warning(self, "Backup failed", str(exc))
+            return
+        self.ctx.toast("Backup saved")
+
+    def _restore(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Restore backup", "", "SQLite database (*.sqlite *.db);;All files (*)"
+        )
+        if not path:
+            return
+        try:
+            export.validate_backup(path)
+        except export.RestoreError as exc:
+            QMessageBox.warning(self, "Cannot restore", str(exc))
+            return
+        reply = QMessageBox.warning(
+            self,
+            "Replace current data?",
+            "Restoring replaces everything AppTrackr has recorded with the contents of the backup. "
+            "Consider backing up first.\n\nContinue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
         )
         if reply != QMessageBox.StandardButton.Yes:
             return
-
-        downloaded = updater_apply.download_and_apply(url)
-        if not downloaded:
-            QMessageBox.warning(self, "Updates", "Download failed. Please try again later.")
+        tracker = self.ctx.tracker
+        was_paused = tracker.paused
+        tracker.pause()
+        try:
+            export.restore_db(path)
+        except Exception as exc:
+            QMessageBox.warning(self, "Restore failed", str(exc))
             return
+        finally:
+            if not was_paused:
+                tracker.resume()
+            tracker.reload_settings()
+        bus.data_changed.emit()
+        bus.rewards_changed.emit()
+        self.ctx.window.apply_theme()
+        self.refresh()
+        self.ctx.toast("Backup restored")
 
-        QMessageBox.information(self, "Updates", "Installer launched. AppTrackr will now close.")
-        sys.exit(0)
+    def _open_folder(self) -> None:
+        folder = db.db_path().parent
+        folder.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
+
+    # Updates -------------------------------------------------------------
+
+    def _check_updates(self) -> None:
+        self.check_btn.setEnabled(False)
+        self.update_status.setText("Checking…")
+        url = self.feed.text().strip()
+
+        def done(info):
+            self.check_btn.setEnabled(True)
+            if info is None:
+                self.update_status.setText(f"You're up to date (checked {fmt.time_of_day(time.time())})")
+                return
+            self.update_status.setText(f"Version {info.version} is available")
+            self.ctx.window.set_update_available(info)
+            self.refresh()
+
+        def failed(exc):
+            self.check_btn.setEnabled(True)
+            self.update_status.setText(str(exc) if isinstance(exc, updater.UpdateError) else "Update check failed")
+
+        run_async(lambda: updater.check_for_update(url), done, failed)
+
+    def _install_update(self) -> None:
+        info = self.ctx.update_info
+        if not info:
+            return
+        if not info.download_url:
+            QDesktopServices.openUrl(QUrl(info.page_url or REPO_URL + "/releases"))
+            return
+        cancel = threading.Event()
+        dialog = QProgressDialog(f"Downloading {APP_NAME} {info.version}…", "Cancel", 0, 1000, self)
+        dialog.setWindowTitle("Updating")
+        dialog.setWindowModality(Qt.WindowModality.WindowModal)
+        dialog.setMinimumDuration(0)
+        dialog.canceled.connect(cancel.set)
+        relay = _ProgressRelay()
+        relay.progress.connect(lambda done_, total: dialog.setValue(int(1000 * done_ / total)) if total else None)
+
+        def finished(path):
+            dialog.close()
+            if (
+                QMessageBox.question(
+                    self, "Install update", f"{APP_NAME} will close and the installer will start. Continue?"
+                )
+                == QMessageBox.StandardButton.Yes
+            ):
+                updater_apply.launch_installer(path)
+                self.ctx.window.quit()
+
+        def failed(exc):
+            dialog.close()
+            if not isinstance(exc, updater_apply.DownloadCancelled):
+                QMessageBox.warning(self, "Download failed", f"The update could not be downloaded.\n\n{exc}")
+
+        run_async(lambda: updater_apply.download(info.download_url, relay.progress.emit, cancel), finished, failed)
+        self._relay = relay

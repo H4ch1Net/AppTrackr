@@ -1,202 +1,200 @@
-"""Calendar heatmap view."""
+"""Calendar: month heatmap with a breakdown of the selected day."""
 
 from __future__ import annotations
 
 import calendar
-from datetime import date, timedelta
+from datetime import date, datetime
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor, QPainter, QFont
-from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGridLayout,
-    QScrollArea, QPushButton, QFrame, QSizePolicy,
-)
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout
 
-from .. import theme
 from ...data import queries
-from ..widgets.components import NeonCard, AppRow
+from .. import fmt
+from ..signals import bus
+from ..widgets.charts import Bar, BarChart, MonthHeatmap
+from ..widgets.components import AppRow, Card, EmptyState, Page, PageHeader, button, clear_layout, label
 
 
-class HeatmapCell(QWidget):
-    """Single day cell in the calendar heatmap."""
-
-    clicked = Signal(str)  # emits day string YYYY-MM-DD
-
-    def __init__(self, day_str: str, total_ms: int, max_ms: int, parent=None):
+class CalendarView(Page):
+    def __init__(self, ctx, parent=None):
         super().__init__(parent)
-        self._day = day_str
-        self._total_ms = total_ms
-        self._max_ms = max_ms
-        self.setFixedSize(28, 28)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setToolTip(f"{day_str}\n{theme.format_ms(total_ms)}")
+        self.setObjectName("page")
+        self.ctx = ctx
+        self._month = date.today().replace(day=1)
+        self._selected = date.today()
 
-    def paintEvent(self, event):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        if self._total_ms == 0:
-            color = QColor(theme.BG_CARD)
+        self.header = PageHeader("Calendar")
+        self.prev_btn = button(
+            "", icon="chevron-left", tooltip="Previous month (PgUp)", on_click=lambda: self._shift(-1)
+        )
+        self.next_btn = button("", icon="chevron-right", tooltip="Next month (PgDown)", on_click=lambda: self._shift(1))
+        self.today_btn = button("Today", on_click=self._go_today)
+        for b in (self.prev_btn, self.today_btn, self.next_btn):
+            self.header.actions.addWidget(b)
+        self.add(self.header)
+
+        cols = QHBoxLayout()
+        cols.setSpacing(14)
+
+        self.month_card = Card()
+        self.month_title = label("", "heading")
+        self.month_card.body.addWidget(self.month_title)
+        self.heatmap = MonthHeatmap()
+        self.heatmap.day_selected.connect(self._on_day)
+        self.month_card.body.addWidget(self.heatmap)
+        stats = QHBoxLayout()
+        stats.setSpacing(18)
+        self.stat_labels = {}
+        for key, caption in (
+            ("total", "Total"),
+            ("avg", "Daily average"),
+            ("active", "Active days"),
+            ("best", "Busiest day"),
+        ):
+            box = QVBoxLayout()
+            box.setSpacing(0)
+            box.addWidget(label(caption, "caption"))
+            value = label("–")
+            value.setStyleSheet("font-weight: 700; font-size: 15px;")
+            box.addWidget(value)
+            self.stat_labels[key] = value
+            stats.addLayout(box)
+        stats.addStretch(1)
+        self.month_card.body.addLayout(stats)
+        self.month_card.body.addStretch(1)
+        cols.addWidget(self.month_card, 11)
+
+        self.day_card = Card()
+        head = QHBoxLayout()
+        names = QVBoxLayout()
+        names.setSpacing(2)
+        self.day_title = label("", "heading")
+        names.addWidget(self.day_title)
+        self.day_sub = label("", "caption")
+        names.addWidget(self.day_sub)
+        head.addLayout(names, 1)
+        self.day_total = label("", "value")
+        head.addWidget(self.day_total, 0, Qt.AlignmentFlag.AlignTop)
+        self.day_card.body.addLayout(head)
+        self.day_hours = BarChart(110)
+        self.day_card.body.addWidget(self.day_hours)
+        self.day_list = QVBoxLayout()
+        self.day_list.setSpacing(2)
+        self.day_card.body.addLayout(self.day_list)
+        self.day_card.body.addStretch(1)
+        cols.addWidget(self.day_card, 10)
+        self.add(cols)
+        self.layout_.addStretch(1)
+
+        bus.data_changed.connect(lambda: self.isVisible() and self.refresh())
+
+    def select_day(self, day: str) -> None:
+        self._selected = date.fromisoformat(day)
+        self._month = self._selected.replace(day=1)
+
+    def refresh(self) -> None:
+        first = self._month
+        last = first.replace(day=calendar.monthrange(first.year, first.month)[1])
+        totals = queries.daily_totals(first.isoformat(), last.isoformat())
+        snap = self.ctx.snapshot()
+        today = date.today()
+        if first <= today <= last and snap.app_id:
+            totals[today.isoformat()] = totals.get(today.isoformat(), 0) + snap.uncommitted_ms
+
+        self.month_title.setText(f"{first:%B %Y}")
+        self.heatmap.set_month(first, totals)
+        self.heatmap.set_selected(self._selected)
+        self.next_btn.setEnabled(first < today.replace(day=1))
+        self.today_btn.setEnabled(self._selected != today or first != today.replace(day=1))
+
+        total = sum(totals.values())
+        active = [v for v in totals.values() if v > 0]
+        self.stat_labels["total"].setText(fmt.duration(total, short=True))
+        self.stat_labels["avg"].setText(fmt.duration(total / len(active), short=True) if active else "–")
+        self.stat_labels["active"].setText(str(len(active)))
+        if active:
+            best = max(totals.items(), key=lambda kv: kv[1])
+            self.stat_labels["best"].setText(f"{fmt.short_date(best[0])} · {fmt.duration(best[1], short=True)}")
         else:
-            intensity = min(self._total_ms / max(self._max_ms, 1), 1.0)
-            c = QColor(theme.get_accent())
-            c.setAlphaF(0.15 + intensity * 0.85)
-            color = c
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(color)
-        p.drawRoundedRect(1, 1, 26, 26, 4, 4)
+            self.stat_labels["best"].setText("–")
+        self.header.set_subtitle(
+            f"{fmt.duration(total, short=True)} tracked in {first:%B}" if total else f"Nothing tracked in {first:%B}"
+        )
+        self._show_day()
 
-        # Day number
-        if self._day:
-            day_num = int(self._day.split("-")[2])
-            p.setPen(QColor(theme.TEXT if self._total_ms > 0 else theme.TEXT_MUTED))
-            p.setFont(QFont("Segoe UI", 8))
-            p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, str(day_num))
-        p.end()
+    def _show_day(self) -> None:
+        day = self._selected
+        key = day.isoformat()
+        apps = queries.top_apps(key, key, limit=None)
+        snap = self.ctx.snapshot()
+        if day == date.today() and snap.app_id:
+            for app in apps:
+                if app["app_id"] == snap.app_id:
+                    app["focused_ms"] += snap.uncommitted_ms
+        total = sum(a["focused_ms"] for a in apps)
+        self.day_title.setText(fmt.long_date(day))
+        self.day_sub.setText(fmt.relative_day(day) if (date.today() - day).days < 7 else f"{day:%Y}")
+        self.day_total.setText(fmt.duration(total, short=True) if total else "")
 
-    def mousePressEvent(self, event):
-        self.clicked.emit(self._day)
+        hours = queries.hourly_totals(key)
+        self.day_hours.set_data(
+            [
+                Bar(f"{h:02d}" if h % 6 == 0 else "", ms, f"{h:02d}:00 · {fmt.duration(ms)}")
+                for h, ms in enumerate(hours)
+            ],
+            highlight=datetime.now().hour if day == date.today() else None,
+            empty_text="No activity on this day",
+        )
+        self.day_hours.setVisible(bool(total))
 
-
-class CalendarView(QWidget):
-    """Calendar heatmap + day drilldown."""
-
-    app_selected = Signal(int)
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._current_month = date.today().replace(day=1)
-        self._build_ui()
-        self.refresh()
-
-    def _build_ui(self):
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 24, 24, 24)
-        layout.setSpacing(16)
-
-        # Header
-        header = QLabel("Calendar")
-        header.setObjectName("heading")
-        layout.addWidget(header)
-
-        # Month nav
-        nav_row = QHBoxLayout()
-        self._prev_btn = QPushButton("◀")
-        self._prev_btn.setFixedSize(36, 36)
-        self._prev_btn.clicked.connect(self._prev_month)
-        nav_row.addWidget(self._prev_btn)
-
-        self._month_label = QLabel()
-        self._month_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._month_label.setStyleSheet(f"font-size: 18px; font-weight: 700; color: {theme.TEXT}; background: transparent;")
-        nav_row.addWidget(self._month_label, stretch=1)
-
-        self._next_btn = QPushButton("▶")
-        self._next_btn.setFixedSize(36, 36)
-        self._next_btn.clicked.connect(self._next_month)
-        nav_row.addWidget(self._next_btn)
-        layout.addLayout(nav_row)
-
-        # Heatmap grid
-        self._grid_container = NeonCard(glow_color=theme.BG_CARD)
-        self._grid_layout = QGridLayout()
-        self._grid_layout.setSpacing(4)
-        self._grid_container.content_layout().addLayout(self._grid_layout)
-        layout.addWidget(self._grid_container)
-
-        # Day drilldown
-        self._drill_label = QLabel("Click a day to see details")
-        self._drill_label.setObjectName("subheading")
-        layout.addWidget(self._drill_label)
-
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
-        self._drill_container = QWidget()
-        self._drill_container.setStyleSheet("background: transparent;")
-        self._drill_layout = QVBoxLayout(self._drill_container)
-        self._drill_layout.setContentsMargins(0, 0, 0, 0)
-        self._drill_layout.setSpacing(6)
-        self._drill_layout.addStretch()
-        scroll.setWidget(self._drill_container)
-        layout.addWidget(scroll, stretch=1)
-
-    def refresh(self):
-        self._month_label.setText(self._current_month.strftime("%B %Y"))
-
-        # Clear grid
-        while self._grid_layout.count():
-            item = self._grid_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-
-        # Day-of-week headers
-        for i, name in enumerate(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]):
-            lbl = QLabel(name)
-            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            lbl.setStyleSheet(f"color: {theme.TEXT_MUTED}; font-size: 10px; background: transparent;")
-            self._grid_layout.addWidget(lbl, 0, i)
-
-        # Get month range
-        year = self._current_month.year
-        month = self._current_month.month
-        _, days_in_month = calendar.monthrange(year, month)
-        start_day = self._current_month.isoformat()
-        end_day = date(year, month, days_in_month).isoformat()
-
-        # Fetch data
-        daily = {d["day"]: d["total_ms"] for d in queries.daily_totals_range(start_day, end_day)}
-        max_ms = max(daily.values()) if daily else 1
-
-        # Build cells
-        first_weekday = self._current_month.weekday()  # 0=Monday
-        for day_num in range(1, days_in_month + 1):
-            d = date(year, month, day_num)
-            day_str = d.isoformat()
-            total_ms = daily.get(day_str, 0)
-            cell = HeatmapCell(day_str, total_ms, max_ms)
-            cell.clicked.connect(self._show_day)
-            row = 1 + (first_weekday + day_num - 1) // 7
-            col = (first_weekday + day_num - 1) % 7
-            self._grid_layout.addWidget(cell, row, col)
-
-    def _show_day(self, day_str: str):
-        self._drill_label.setText(f"Apps on {day_str}")
-
-        # Clear
-        while self._drill_layout.count() > 1:
-            item = self._drill_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-
-        apps = queries.day_breakdown(day_str)
+        clear_layout(self.day_list)
         if not apps:
-            lbl = QLabel("No data for this day")
-            lbl.setStyleSheet(f"color: {theme.TEXT_MUTED}; background: transparent;")
-            self._drill_layout.insertWidget(0, lbl)
+            self.day_list.addWidget(EmptyState("calendar-days", "No activity", "Nothing was tracked on this day."))
             return
-
-        max_ms = max(a.get("focused_ms", 1) for a in apps)
-        for i, app in enumerate(apps):
+        peak = apps[0]["focused_ms"] or 1
+        for app in apps[:12]:
             row = AppRow(
-                app_id=app["app_id"],
-                name=app.get("display_name") or app["exe_name"],
-                value_ms=app.get("focused_ms", 0),
-                max_ms=max_ms,
-                is_favorite=False,
+                app,
+                fmt.duration(app["focused_ms"], short=True),
+                app["focused_ms"] / peak,
+                sub=app.get("category") or "",
+                extra=f"{app['focused_ms'] / (total or 1):.0%}",
             )
-            row.clicked.connect(self.app_selected.emit)
-            self._drill_layout.insertWidget(i, row)
+            row.clicked.connect(self.ctx.open_app)
+            row.context_requested.connect(self.ctx.app_menu)
+            self.day_list.addWidget(row)
+        if len(apps) > 12:
+            self.day_list.addWidget(label(f"and {len(apps) - 12} more", "caption"))
 
-    def _prev_month(self):
-        if self._current_month.month == 1:
-            self._current_month = self._current_month.replace(year=self._current_month.year - 1, month=12)
+    def _on_day(self, day: str) -> None:
+        self._selected = date.fromisoformat(day)
+        if self._selected.replace(day=1) != self._month:
+            self._month = self._selected.replace(day=1)
+            self.refresh()
         else:
-            self._current_month = self._current_month.replace(month=self._current_month.month - 1)
+            self.today_btn.setEnabled(self._selected != date.today())
+            self._show_day()
+
+    def _shift(self, months: int) -> None:
+        y, m = self._month.year, self._month.month + months
+        y, m = y + (m - 1) // 12, (m - 1) % 12 + 1
+        target = date(y, m, 1)
+        if target > date.today().replace(day=1):
+            return
+        self._month = target
+        last = calendar.monthrange(y, m)[1]
+        self._selected = min(date.today(), target.replace(day=min(self._selected.day, last)))
         self.refresh()
 
-    def _next_month(self):
-        if self._current_month.month == 12:
-            self._current_month = self._current_month.replace(year=self._current_month.year + 1, month=1)
-        else:
-            self._current_month = self._current_month.replace(month=self._current_month.month + 1)
+    def _go_today(self) -> None:
+        self._selected = date.today()
+        self._month = self._selected.replace(day=1)
         self.refresh()
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_PageUp:
+            self._shift(-1)
+        elif event.key() == Qt.Key.Key_PageDown:
+            self._shift(1)
+        else:
+            super().keyPressEvent(event)
