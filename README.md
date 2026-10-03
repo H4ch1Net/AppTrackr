@@ -55,7 +55,11 @@ time in chosen apps into XP and a small village-building game.
   </tr>
   <tr>
     <td><img src="docs/screenshots/village.png" alt="Village"><br><sub>Neon Village: buildings, inventory and market</sub></td>
-    <td><img src="docs/screenshots/dashboard-light.png" alt="Light theme"><br><sub>Light theme</sub></td>
+    <td><img src="docs/screenshots/settings.png" alt="Settings"><br><sub>Settings apply immediately</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/dashboard-light.png" alt="Dashboard in the light theme"><br><sub>Light theme</sub></td>
+    <td><img src="docs/screenshots/calendar-light.png" alt="Calendar in the light theme"><br><sub>Light theme, calendar</sub></td>
   </tr>
 </table>
 
