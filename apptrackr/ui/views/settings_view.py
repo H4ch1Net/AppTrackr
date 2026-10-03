@@ -32,6 +32,7 @@ from .. import fmt, motion, theme
 from ..signals import bus, run_async
 from ..widgets.components import (
     Card,
+    ElidedLabel,
     Page,
     PageHeader,
     SegmentedControl,
@@ -245,8 +246,7 @@ class SettingsView(Page):
         row.addStretch(1)
         row.addWidget(button("Open data folder", kind="ghost", icon="folder-open", on_click=self._open_folder))
         card.body.addLayout(row)
-        self.db_path = label("", "caption")
-        self.db_path.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.db_path = ElidedLabel("", "caption")  # long data paths must not widen the page
         card.body.addWidget(self.db_path)
         self.add(card)
 

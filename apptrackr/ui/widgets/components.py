@@ -90,6 +90,38 @@ class RoleLabel(QLabel):
         super().setText(text.upper() if self.property("role") in UPPERCASE_ROLES else text)
 
 
+class ElidedLabel(QLabel):
+    """Single-line label that elides in the middle to fit (paths); the full text is its tooltip."""
+
+    def __init__(self, text: str = "", role: str | None = None, parent=None):
+        super().__init__(parent)
+        self._full = ""
+        set_role(self, role)
+        self.setText(text)
+
+    def setText(self, text: str) -> None:  # noqa: N802 - Qt naming
+        self._full = text
+        self.setToolTip(text)
+        self.updateGeometry()
+        self._elide()
+
+    def full_text(self) -> str:
+        return self._full
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        return QSize(self.fontMetrics().horizontalAdvance(self._full), super().sizeHint().height())
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        return QSize(0, super().minimumSizeHint().height())
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._elide()
+
+    def _elide(self) -> None:
+        super().setText(self.fontMetrics().elidedText(self._full, Qt.TextElideMode.ElideMiddle, self.width()))
+
+
 def label(text: str = "", role: str | None = None, wrap: bool = False, align: Qt.AlignmentFlag | None = None) -> QLabel:
     lbl = RoleLabel()
     if role:
