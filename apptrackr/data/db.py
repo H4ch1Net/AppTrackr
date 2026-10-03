@@ -108,6 +108,7 @@ def _migrate_v1(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE apps ADD COLUMN is_hidden INTEGER NOT NULL DEFAULT 0")
     if "daily_limit_ms" not in cols:
         conn.execute("ALTER TABLE apps ADD COLUMN daily_limit_ms INTEGER")
+    _merge_alias_apps(conn)
 
     row = conn.execute("SELECT value FROM settings WHERE key = 'idle_threshold_sec'").fetchone()
     idle_ms = int(row["value"]) * 1000 if row and str(row["value"]).isdigit() else 300_000
@@ -132,6 +133,38 @@ def _migrate_v1(conn: sqlite3.Connection) -> None:
         [(day, app_id, ms) for (day, app_id), ms in totals.items()],
     )
     conn.execute("DELETE FROM usage_sessions WHERE end_ts IS NULL")
+
+
+def _merge_alias_apps(conn: sqlite3.Connection) -> None:
+    """Fold rows for helper executables (e.g. steamwebhelper.exe) into their app."""
+    from .catalog import EXE_ALIASES
+
+    for alias, canonical in EXE_ALIASES.items():
+        old = conn.execute("SELECT app_id FROM apps WHERE exe_name = ?", (alias,)).fetchone()
+        if not old:
+            continue
+        new = conn.execute("SELECT app_id FROM apps WHERE exe_name = ?", (canonical,)).fetchone()
+        if not new:
+            conn.execute(
+                "UPDATE apps SET exe_name = ?, display_name = NULL WHERE app_id = ?", (canonical, old["app_id"])
+            )
+            continue
+        old_id, new_id = old["app_id"], new["app_id"]
+        conn.execute(
+            "INSERT INTO daily_rollup (day, app_id, focused_ms, opens_count, clicks_count) "
+            "SELECT day, ?, focused_ms, opens_count, clicks_count FROM daily_rollup WHERE app_id = ? "
+            "ON CONFLICT(day, app_id) DO UPDATE SET focused_ms = focused_ms + excluded.focused_ms, "
+            "opens_count = opens_count + excluded.opens_count, clicks_count = clicks_count + excluded.clicks_count",
+            (new_id, old_id),
+        )
+        conn.execute("DELETE FROM daily_rollup WHERE app_id = ?", (old_id,))
+        if conn.execute("SELECT 1 FROM reward_rules WHERE app_id = ?", (new_id,)).fetchone():
+            # Keep the alias's rules for its reward history, but don't pay out twice.
+            conn.execute("UPDATE reward_rules SET enabled = 0 WHERE app_id = ?", (old_id,))
+        for table in ("usage_sessions", "focus_events", "reward_rules", "reward_events"):
+            if _table_exists(conn, table):
+                conn.execute(f"UPDATE {table} SET app_id = ? WHERE app_id = ?", (new_id, old_id))
+        conn.execute("DELETE FROM apps WHERE app_id = ?", (old_id,))
 
 
 _MIGRATIONS: list[tuple[int, Callable[[sqlite3.Connection], None]]] = [

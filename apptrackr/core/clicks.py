@@ -61,7 +61,8 @@ class ClickCounter:
     def _on_click(self, _x, _y, _button, pressed) -> None:
         if not pressed:
             return
-        app_id = self._tracker.snapshot().app_id
+        # Runs inside the low-level mouse hook: never block here.
+        app_id = self._tracker.current_app_id
         if app_id is not None:
             with self._lock:
                 self._counts[(date.today().isoformat(), app_id)] += 1

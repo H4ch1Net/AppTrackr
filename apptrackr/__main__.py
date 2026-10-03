@@ -1,9 +1,13 @@
-"""Entry point: `python -m apptrackr` or the `apptrackr` script."""
+"""Entry point: `python -m apptrackr`, the `apptrackr` script or the PyInstaller bundle.
+
+Imports are absolute because PyInstaller runs this file as a top-level script.
+"""
 
 from __future__ import annotations
 
 import argparse
 import getpass
+import hashlib
 import logging
 import logging.handlers
 import shutil
@@ -11,7 +15,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from . import APP_NAME, APP_USER_MODEL_ID, __version__, paths
+from apptrackr import APP_NAME, APP_USER_MODEL_ID, __version__, paths
 
 log = logging.getLogger("apptrackr")
 
@@ -57,8 +61,10 @@ def setup_logging(debug: bool) -> None:
     sys.excepthook = excepthook
 
 
-def _instance_key(demo: bool) -> str:
-    return f"{APP_NAME}-{getpass.getuser()}" + ("-demo" if demo else "")
+def _instance_key() -> str:
+    """Socket name shared by every launch that uses the same data folder."""
+    folder = hashlib.sha1(str(paths.data_dir().resolve()).encode()).hexdigest()[:10]
+    return f"{APP_NAME}-{getpass.getuser()}-{folder}"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -80,7 +86,7 @@ def main(argv: list[str] | None = None) -> int:
         except Exception:
             pass
 
-    from PySide6.QtCore import Qt
+    from PySide6.QtCore import QLockFile, Qt
     from PySide6.QtGui import QGuiApplication
     from PySide6.QtNetwork import QLocalServer, QLocalSocket
     from PySide6.QtWidgets import QApplication
@@ -92,30 +98,36 @@ def main(argv: list[str] | None = None) -> int:
     app.setOrganizationName("H4ch1Net")
     app.setQuitOnLastWindowClosed(False)
 
-    # Single instance: a second launch asks the running one to show itself.
-    key = _instance_key(args.demo)
-    probe = QLocalSocket()
-    probe.connectToServer(key)
-    if probe.waitForConnected(300):
-        probe.write(b"show")
-        probe.flush()
-        probe.waitForBytesWritten(300)
+    # Single instance: a lock file decides who runs; a local socket lets a second
+    # launch ask the running instance to show its window.
+    key = _instance_key()
+    paths.data_dir().mkdir(parents=True, exist_ok=True)
+    lock = QLockFile(str(paths.data_dir() / "apptrackr.lock"))
+    lock.setStaleLockTime(0)
+    if not lock.tryLock(500):
+        probe = QLocalSocket()
+        probe.connectToServer(key)
+        if probe.waitForConnected(1000):
+            probe.write(b"show")
+            probe.flush()
+            probe.waitForBytesWritten(500)
         log.info("Already running; asked the existing window to show")
         return 0
     QLocalServer.removeServer(key)
     server = QLocalServer()
-    server.listen(key)
+    if not server.listen(key):
+        log.warning("Could not listen for other launches: %s", server.errorString())
 
-    from .core.clicks import ClickCounter
-    from .core.platform import create_platform
-    from .core.process_watch import ProcessWatcher
-    from .core.tracker import Tracker
-    from .data import db
-    from .ui.main import MainWindow, prepare_app
+    from apptrackr.core.clicks import ClickCounter
+    from apptrackr.core.platform import create_platform
+    from apptrackr.core.process_watch import ProcessWatcher
+    from apptrackr.core.tracker import Tracker
+    from apptrackr.data import db
+    from apptrackr.ui.main import MainWindow, prepare_app
 
     db.init_db()
     if args.demo:
-        from .data import demo
+        from apptrackr.data import demo
 
         demo.seed()
         log.info("Demo mode: sample data in %s", paths.data_dir())
@@ -145,6 +157,7 @@ def main(argv: list[str] | None = None) -> int:
         watcher.stop()
         tracker.stop()
         server.close()
+        lock.unlock()
         if args.demo:
             db.close()
             shutil.rmtree(paths.data_dir(), ignore_errors=True)
@@ -162,10 +175,10 @@ def self_test() -> int:
     paths.set_data_dir(Path(tempfile.mkdtemp(prefix="apptrackr-selftest-")))
     from PySide6.QtWidgets import QApplication
 
-    from .core.platform import NullPlatform
-    from .core.tracker import Tracker
-    from .data import db, demo
-    from .ui.main import MainWindow, prepare_app
+    from apptrackr.core.platform import NullPlatform
+    from apptrackr.core.tracker import Tracker
+    from apptrackr.data import db, demo
+    from apptrackr.ui.main import MainWindow, prepare_app
 
     db.init_db()
     demo.seed(days=7)

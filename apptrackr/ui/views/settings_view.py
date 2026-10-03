@@ -449,6 +449,7 @@ class SettingsView(Page):
             return
         tracker = self.ctx.tracker
         was_paused = tracker.paused
+        paused_until = tracker.snapshot().paused_until
         tracker.pause()
         try:
             export.restore_db(path)
@@ -456,8 +457,11 @@ class SettingsView(Page):
             QMessageBox.warning(self, "Restore failed", str(exc))
             return
         finally:
-            if not was_paused:
-                tracker.resume()
+            tracker.resume()
+            if was_paused:
+                remaining = (paused_until - time.time()) / 60 if paused_until else None
+                if remaining is None or remaining > 0:
+                    tracker.pause(remaining)
             tracker.reload_settings()
         bus.data_changed.emit()
         bus.rewards_changed.emit()

@@ -73,7 +73,7 @@ class RestoreError(Exception):
 def validate_backup(src: str | Path) -> None:
     """Raise RestoreError unless *src* looks like an AppTrackr database."""
     try:
-        conn = sqlite3.connect(f"file:{Path(src).as_posix()}?mode=ro", uri=True)
+        conn = sqlite3.connect(Path(src).resolve().as_uri() + "?mode=ro", uri=True)
         try:
             tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             if conn.execute("PRAGMA integrity_check").fetchone()[0] != "ok":

@@ -1,7 +1,13 @@
 from datetime import datetime, timedelta
 
 from apptrackr.core.platform import ForegroundApp
-from apptrackr.core.tracker import STATUS_IDLE, STATUS_LOCKED, STATUS_PAUSED, STATUS_TRACKING, Tracker
+from apptrackr.core.tracker import (
+    STATUS_IDLE,
+    STATUS_LOCKED,
+    STATUS_PAUSED,
+    STATUS_TRACKING,
+    Tracker,
+)
 from apptrackr.data import db, queries
 
 
@@ -39,6 +45,14 @@ def make(start=None):
     return tracker, platform, clock
 
 
+def run(tracker, platform, clock, seconds, step=5, idle=False):
+    """Advance time in small steps, sampling like the real loop does."""
+    for _ in range(int(seconds // step)):
+        clock.t += step
+        platform.idle = platform.idle + step if idle else 0.0
+        tracker.tick()
+
+
 def focused(exe, day="2026-03-10"):
     app_id = queries.find_app_id(exe)
     return queries.app_usage_on(day, app_id) if app_id else 0
@@ -48,10 +62,10 @@ def test_switching_apps_records_time():
     tracker, platform, clock = make()
     platform.exe = "code.exe"
     tracker.tick()
-    clock.t += 120
+    run(tracker, platform, clock, 120)
     platform.exe = "chrome.exe"
     tracker.tick()
-    clock.t += 60
+    run(tracker, platform, clock, 60)
     tracker.stop()
     assert focused("code.exe") == 120_000
     assert focused("chrome.exe") == 60_000
@@ -61,9 +75,9 @@ def test_checkpoints_make_totals_live():
     tracker, platform, clock = make()
     platform.exe = "code.exe"
     tracker.tick()
-    clock.t += Tracker.CHECKPOINT_SEC + 1
-    tracker.tick()
-    assert focused("code.exe") == (Tracker.CHECKPOINT_SEC + 1) * 1000
+    run(tracker, platform, clock, 35)
+    assert focused("code.exe") == 30_000  # committed at the 30 s checkpoint
+    assert tracker.snapshot().uncommitted_ms == 5_000
     assert tracker.snapshot().status == STATUS_TRACKING
 
 
@@ -71,14 +85,8 @@ def test_idle_session_is_counted_up_to_last_input():
     tracker, platform, clock = make()
     platform.exe = "code.exe"
     tracker.tick()
-    # Work for 10 minutes with checkpoints, then go idle past the threshold.
-    for _ in range(20):
-        clock.t += 30
-        tracker.tick()
-    for _ in range(11):
-        clock.t += 30
-        platform.idle += 30
-        tracker.tick()
+    run(tracker, platform, clock, 600)
+    run(tracker, platform, clock, 330, idle=True)
     assert tracker.snapshot().status == STATUS_IDLE
     assert focused("code.exe") == 600_000
 
@@ -87,13 +95,40 @@ def test_lock_stops_tracking():
     tracker, platform, clock = make()
     platform.exe = "code.exe"
     tracker.tick()
-    clock.t += 45
+    run(tracker, platform, clock, 45)
     platform.locked = True
     tracker.tick()
     assert tracker.snapshot().status == STATUS_LOCKED
-    clock.t += 600
-    tracker.tick()
+    run(tracker, platform, clock, 600)
     assert focused("code.exe") == 45_000
+
+
+def test_sleep_gap_is_not_counted():
+    tracker, platform, clock = make()
+    db.set_setting("idle_threshold_sec", 0)  # even with idle detection off
+    tracker.reload_settings()
+    platform.exe = "code.exe"
+    tracker.tick()
+    run(tracker, platform, clock, 60)
+    clock.t += 8 * 3600  # lid closed overnight
+    tracker.tick()
+    run(tracker, platform, clock, 30)
+    tracker.stop()
+    assert focused("code.exe") == 90_000
+
+
+def test_focus_stolen_while_away_ends_at_last_input():
+    tracker, platform, clock = make()
+    db.set_setting("idle_threshold_sec", 600)
+    tracker.reload_settings()
+    platform.exe = "code.exe"
+    tracker.tick()
+    run(tracker, platform, clock, 120)
+    run(tracker, platform, clock, 240, idle=True)  # away, below the idle timeout
+    platform.exe = "teams.exe"  # a popup takes focus, no input
+    tracker.tick()
+    tracker.stop()
+    assert focused("code.exe") == 120_000
 
 
 def test_midnight_split():
@@ -101,7 +136,7 @@ def test_midnight_split():
     tracker, platform, clock = make(start)
     platform.exe = "code.exe"
     tracker.tick()
-    clock.t += 180
+    run(tracker, platform, clock, 180)
     tracker.stop()
     assert focused("code.exe", "2026-03-10") == 60_000
     assert focused("code.exe", "2026-03-11") == 120_000
@@ -111,13 +146,13 @@ def test_system_and_excluded_apps_are_ignored():
     tracker, platform, clock = make()
     platform.exe = "code.exe"
     tracker.tick()
-    clock.t += 30
+    run(tracker, platform, clock, 30)
     platform.exe = "explorer.exe"
     tracker.tick()
-    clock.t += 300
+    run(tracker, platform, clock, 300)
     platform.exe = "code.exe"
     tracker.tick()
-    clock.t += 30
+    run(tracker, platform, clock, 30)
     tracker.stop()
     assert focused("code.exe") == 60_000
     assert queries.find_app_id("explorer.exe") is None
@@ -125,7 +160,7 @@ def test_system_and_excluded_apps_are_ignored():
     queries.set_hidden(queries.find_app_id("code.exe"), True)
     tracker.reload_settings()
     tracker.tick()
-    clock.t += 100
+    run(tracker, platform, clock, 100)
     tracker.stop()
     assert focused("code.exe") == 60_000
 
@@ -136,8 +171,7 @@ def test_timed_pause_resumes():
     tracker.pause(minutes=15)
     tracker.tick()
     assert tracker.snapshot().status == STATUS_PAUSED
-    clock.t += 15 * 60
-    tracker.tick()
+    run(tracker, platform, clock, 15 * 60)
     assert not tracker.paused
     assert tracker.snapshot().app_id is not None
 
@@ -146,7 +180,7 @@ def test_helper_alias_folds_into_app():
     tracker, platform, clock = make()
     platform.exe = "steamwebhelper.exe"
     tracker.tick()
-    clock.t += 10
+    run(tracker, platform, clock, 10)
     tracker.stop()
     assert focused("steam.exe") == 10_000
 
@@ -155,12 +189,20 @@ def test_session_rows_have_durations():
     tracker, platform, clock = make()
     platform.exe = "code.exe"
     tracker.tick()
-    clock.t += 90
+    run(tracker, platform, clock, 90)
     tracker.stop()
     rows = db.fetchall("SELECT duration_ms FROM usage_sessions")
     assert [r["duration_ms"] for r in rows] == [90_000]
     hours = queries.hourly_totals("2026-03-10")
     assert hours[12] == 90_000 and sum(hours) == 90_000
+
+
+def test_current_app_id_is_lock_free():
+    tracker, platform, clock = make()
+    platform.exe = "code.exe"
+    tracker.tick()
+    with tracker._lock:  # held by another thread in practice
+        assert tracker.current_app_id == queries.find_app_id("code.exe")
 
 
 def test_split_by_day_spans_multiple_days():

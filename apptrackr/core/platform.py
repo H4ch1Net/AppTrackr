@@ -162,7 +162,9 @@ class WindowsPlatform:
         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
             return None
         app = ForegroundApp(proc.pid, name, path)
-        self._last_key, self._last_app = key, app
+        # A UWP frame can be sampled before its app window attaches; retry next time.
+        if name.lower() != self._UWP_HOST:
+            self._last_key, self._last_app = key, app
         return app
 
     def idle_seconds(self) -> float:

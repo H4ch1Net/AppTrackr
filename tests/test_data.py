@@ -98,6 +98,21 @@ def test_backup_and_restore_roundtrip(tmp_path):
     assert queries.find_app_id("chrome.exe") is None
 
 
+def test_restore_from_path_with_special_characters(tmp_path):
+    folder = tmp_path / "Backups #2 100%"
+    folder.mkdir()
+    queries.get_or_create_app("code.exe")
+    export.backup_db(folder / "backup.sqlite")
+    export.restore_db(folder / "backup.sqlite")
+    assert queries.find_app_id("code.exe") is not None
+    assert sorted(p.name for p in tmp_path.iterdir()) == [
+        "Backups #2 100%",
+        "data.sqlite",
+        "data.sqlite-shm",
+        "data.sqlite-wal",
+    ]
+
+
 def test_restore_rejects_foreign_files(tmp_path):
     bogus = tmp_path / "bogus.sqlite"
     bogus.write_text("not a database")
@@ -139,10 +154,26 @@ def test_v1_migration_recovers_idle_sessions(tmp_path):
     conn.commit()
     conn.close()
 
+    # v1.0 also stored helper processes under their own names.
+    conn = sqlite3.connect(legacy)
+    conn.execute("INSERT INTO apps (exe_name) VALUES ('steam.exe'), ('steamwebhelper.exe')")
+    conn.execute(
+        "INSERT INTO usage_sessions (app_id, start_ts, end_ts, duration_ms) VALUES (3, ?, ?, 60000)",
+        (start, start + 60),
+    )
+    conn.execute("INSERT INTO daily_rollup (day, app_id, focused_ms, opens_count) VALUES ('2026-02-01', 3, 60000, 2)")
+    conn.execute("INSERT INTO daily_rollup (day, app_id, focused_ms, opens_count) VALUES ('2026-02-01', 2, 0, 1)")
+    conn.commit()
+    conn.close()
+
     db.configure(legacy)
     db.init_db()
-    row = db.fetchone("SELECT focused_ms, opens_count FROM daily_rollup WHERE day = '2026-02-01'")
+    row = db.fetchone("SELECT focused_ms, opens_count FROM daily_rollup WHERE day = '2026-02-01' AND app_id = 1")
     assert row["focused_ms"] == 2_100_000 + 600_000
     assert row["opens_count"] == 7
+    assert queries.find_app_id("steamwebhelper.exe") == queries.find_app_id("steam.exe") == 2
+    steam = db.fetchone("SELECT focused_ms, opens_count FROM daily_rollup WHERE app_id = 2")
+    assert (steam["focused_ms"], steam["opens_count"]) == (60_000, 3)
+    assert db.fetchone("SELECT COUNT(*) AS n FROM apps WHERE exe_name LIKE 'steam%'")["n"] == 1
     assert db.fetchone("PRAGMA user_version")[0] == db.SCHEMA_VERSION
     assert "is_hidden" in {r["name"] for r in db.fetchall("PRAGMA table_info(apps)")}

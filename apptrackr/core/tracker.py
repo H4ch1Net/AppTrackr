@@ -43,6 +43,12 @@ class Tracker:
     """Polls the platform for the focused app and attributes time to it."""
 
     CHECKPOINT_SEC = 30.0
+    # A pause between samples longer than this means the machine slept or the
+    # process was suspended; the session is closed at the last sample.
+    GAP_SEC = 15.0
+    # Focus that changes with no input for this long was not caused by the user,
+    # so the previous session ends at the last input.
+    SWITCH_IDLE_SEC = 30.0
 
     def __init__(self, platform: Platform, clock: Callable[[], float] = time.time) -> None:
         self._platform = platform
@@ -61,6 +67,7 @@ class Tracker:
         self._session_start = 0.0
         self._committed_until = 0.0
         self._next_checkpoint = 0.0
+        self._last_tick: float | None = None
         self._paused = False
         self._paused_until: float | None = None
         self._status = STATUS_WAITING if platform.supported else STATUS_UNSUPPORTED
@@ -122,6 +129,11 @@ class Tracker:
     def supported(self) -> bool:
         return self._platform.supported
 
+    @property
+    def current_app_id(self) -> int | None:
+        """Lock-free read for hot paths such as the mouse hook."""
+        return self._app_id
+
     def snapshot(self) -> Snapshot:
         with self._lock:
             now = self._clock()
@@ -154,6 +166,9 @@ class Tracker:
         """Take one sample. Public so tests can drive the tracker deterministically."""
         with self._lock:
             now = self._clock()
+            last_tick, self._last_tick = self._last_tick, now
+            if last_tick is not None and now - last_tick > self.GAP_SEC:
+                self._close(last_tick)
 
             if self._paused:
                 if self._paused_until is not None and now >= self._paused_until:
@@ -182,9 +197,13 @@ class Tracker:
                     self._checkpoint(last_input)
                 return
 
+            # A focus change nobody caused (a popup while the user is away) should
+            # not credit the away time to the previous app.
+            switch_end = last_input if idle >= self.SWITCH_IDLE_SEC else now
+
             exe = catalog.canonical_exe(fg.exe_name)
             if not catalog.is_trackable(exe) or exe in self._excluded:
-                self._close(now)
+                self._close(switch_end)
                 self._status = STATUS_WAITING
                 return
 
@@ -194,7 +213,7 @@ class Tracker:
                     self._checkpoint(last_input)
                 return
 
-            self._close(now)
+            self._close(switch_end)
             self._open(exe, fg.exe_path, now)
 
     # ------------------------------------------------------------------
