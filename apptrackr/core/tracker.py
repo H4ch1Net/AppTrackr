@@ -1,249 +1,254 @@
-"""Foreground window tracker – polls the active window and records focus sessions."""
+"""Foreground tracker: samples the focused app and records focus sessions.
+
+Time is committed to the database in small checkpoints, so totals are live,
+a crash loses at most one checkpoint interval, and sessions that cross
+midnight are split between days.
+"""
 
 from __future__ import annotations
 
-import ctypes
-import ctypes.wintypes
-import hashlib
 import logging
-import os
 import threading
 import time
-from dataclasses import dataclass, field
-from datetime import date
+from dataclasses import dataclass
+from typing import Callable
 
-import psutil
-
-from ..data import db, queries, rollup
+from ..data import catalog, db, queries
+from .platform import Platform
 
 log = logging.getLogger(__name__)
 
-# Win32 API bindings
-user32 = ctypes.windll.user32  # type: ignore[attr-defined]
-kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
-
-# System / ignored executables
-_IGNORED_EXES = frozenset({
-    "explorer.exe", "searchui.exe", "shellexperiencehost.exe",
-    "startmenuexperiencehost.exe", "textinputhost.exe", "lockapp.exe",
-    "systemsettings.exe", "searchhost.exe", "widgets.exe",
-})
+STATUS_TRACKING = "tracking"
+STATUS_IDLE = "idle"
+STATUS_PAUSED = "paused"
+STATUS_LOCKED = "locked"
+STATUS_WAITING = "waiting"  # nothing trackable in focus
+STATUS_UNSUPPORTED = "unsupported"
 
 
-@dataclass
-class _TrackerState:
-    current_app_id: int | None = None
-    current_session_id: int | None = None
-    current_exe: str | None = None
-    current_start: float = 0.0
-    paused: bool = False
-    running: bool = False
-    session_locked: bool = False
+@dataclass(frozen=True)
+class Snapshot:
+    """Thread-safe view of the tracker for the UI."""
+
+    status: str
+    app_id: int | None = None
+    exe_name: str | None = None
+    session_start: float = 0.0
+    session_ms: int = 0
+    uncommitted_ms: int = 0
+    paused_until: float | None = None
 
 
 class Tracker:
-    """Polls the foreground window and attributes time to apps."""
+    """Polls the platform for the focused app and attributes time to it."""
 
-    def __init__(self) -> None:
-        self._state = _TrackerState()
+    CHECKPOINT_SEC = 30.0
+    # A pause between samples longer than this means the machine slept or the
+    # process was suspended; the session is closed at the last sample.
+    GAP_SEC = 15.0
+    # Focus that changes with no input for this long was not caused by the user,
+    # so the previous session ends at the last input.
+    SWITCH_IDLE_SEC = 30.0
+
+    def __init__(self, platform: Platform, clock: Callable[[], float] = time.time) -> None:
+        self._platform = platform
+        self._clock = clock
+        self._lock = threading.RLock()
         self._thread: threading.Thread | None = None
-        self._lock = threading.Lock()
-        self._callbacks: list = []
-        self._idle_threshold: int = 300  # seconds
-        self._poll_interval: float = 0.25  # 4 Hz
-        self._track_titles: bool = False
+        self._stop = threading.Event()
+
+        self._idle_threshold = 300
+        self._poll_interval = 0.25
+        self._excluded: set[str] = set()
+
+        self._app_id: int | None = None
+        self._exe: str | None = None
+        self._session_id: int | None = None
+        self._session_start = 0.0
+        self._committed_until = 0.0
+        self._next_checkpoint = 0.0
+        self._last_tick: float | None = None
+        self._paused = False
+        self._paused_until: float | None = None
+        self._status = STATUS_WAITING if platform.supported else STATUS_UNSUPPORTED
 
     # ------------------------------------------------------------------
-    # Public control
+    # Lifecycle
     # ------------------------------------------------------------------
 
     def start(self) -> None:
-        db.init_db()
-        self._load_settings()
-        self._state.running = True
+        self.reload_settings()
+        if not self._platform.supported:
+            log.info("Tracker not started: platform unsupported")
+            return
+        self._stop.clear()
         self._thread = threading.Thread(target=self._loop, daemon=True, name="tracker")
         self._thread.start()
-        log.info("Tracker started (poll %.0f Hz)", 1 / self._poll_interval)
+        log.info("Tracker started (%.1f Hz, idle after %ss)", 1 / self._poll_interval, self._idle_threshold)
 
     def stop(self) -> None:
-        self._state.running = False
-        self._flush()
-
-    def pause(self) -> None:
+        self._stop.set()
+        if self._thread and self._thread.is_alive() and self._thread is not threading.current_thread():
+            self._thread.join(timeout=2)
         with self._lock:
-            self._state.paused = True
-            self._flush_unlocked()
+            self._close(self._clock())
+
+    def reload_settings(self) -> None:
+        with self._lock:
+            self._idle_threshold = max(0, db.get_int("idle_threshold_sec", 300))
+            hz = min(max(db.get_int("polling_hz", 4), 1), 10)
+            self._poll_interval = 1.0 / hz
+            self._excluded = queries.hidden_exes()
+            if self._exe in self._excluded:
+                self._close(self._clock())
+
+    # ------------------------------------------------------------------
+    # Pause / resume
+    # ------------------------------------------------------------------
+
+    def pause(self, minutes: float | None = None) -> None:
+        """Pause tracking, optionally resuming automatically after *minutes*."""
+        with self._lock:
+            now = self._clock()
+            self._close(now)
+            self._paused = True
+            self._paused_until = now + minutes * 60 if minutes else None
+            self._status = STATUS_PAUSED
 
     def resume(self) -> None:
         with self._lock:
-            self._state.paused = False
+            self._paused = False
+            self._paused_until = None
+            self._status = STATUS_WAITING
 
     @property
     def paused(self) -> bool:
-        return self._state.paused
+        return self._paused
 
     @property
-    def current_exe(self) -> str | None:
-        return self._state.current_exe
+    def supported(self) -> bool:
+        return self._platform.supported
 
     @property
     def current_app_id(self) -> int | None:
-        return self._state.current_app_id
+        """Lock-free read for hot paths such as the mouse hook."""
+        return self._app_id
 
-    @property
-    def session_elapsed_ms(self) -> int:
-        s = self._state
-        if s.current_start and s.current_app_id and not s.paused:
-            return int((time.time() - s.current_start) * 1000)
-        return 0
-
-    def on_change(self, callback) -> None:
-        """Register callback(app_id, exe_name) for focus changes."""
-        self._callbacks.append(callback)
-
-    # ------------------------------------------------------------------
-    # Settings
-    # ------------------------------------------------------------------
-
-    def _load_settings(self) -> None:
-        self._idle_threshold = int(db.get_setting("idle_threshold_sec", "300"))
-        self._track_titles = db.get_setting("track_window_titles", "0") == "1"
-        hz = int(db.get_setting("polling_hz", "4"))
-        self._poll_interval = 1.0 / max(hz, 1)
-
-    def reload_settings(self) -> None:
-        self._load_settings()
+    def snapshot(self) -> Snapshot:
+        with self._lock:
+            now = self._clock()
+            if self._app_id is None:
+                return Snapshot(self._status, paused_until=self._paused_until)
+            return Snapshot(
+                status=self._status,
+                app_id=self._app_id,
+                exe_name=self._exe,
+                session_start=self._session_start,
+                session_ms=int(max(0.0, now - self._session_start) * 1000),
+                uncommitted_ms=int(max(0.0, now - self._committed_until) * 1000),
+                paused_until=self._paused_until,
+            )
 
     # ------------------------------------------------------------------
-    # Main loop
+    # Sampling
     # ------------------------------------------------------------------
 
     def _loop(self) -> None:
-        while self._state.running:
+        while not self._stop.is_set():
             try:
-                self._tick()
+                self.tick()
             except Exception:
-                log.exception("Tracker tick error")
-            time.sleep(self._poll_interval)
+                log.exception("Tracker tick failed")
+            self._stop.wait(self._poll_interval)
+        db.close()
 
-    def _tick(self) -> None:
+    def tick(self) -> None:
+        """Take one sample. Public so tests can drive the tracker deterministically."""
         with self._lock:
-            if self._state.paused or self._is_locked():
-                if self._state.current_app_id:
-                    self._flush_unlocked()
+            now = self._clock()
+            last_tick, self._last_tick = self._last_tick, now
+            if last_tick is not None and now - last_tick > self.GAP_SEC:
+                self._close(last_tick)
+
+            if self._paused:
+                if self._paused_until is not None and now >= self._paused_until:
+                    self.resume()
+                else:
+                    return
+
+            idle = self._platform.idle_seconds() if self._idle_threshold else 0.0
+            # Checkpoints only commit time up to the last input, so a session
+            # that ends in idleness never has the idle stretch already counted.
+            last_input = now - idle
+
+            if self._platform.is_locked():
+                self._close(last_input)
+                self._status = STATUS_LOCKED
                 return
 
-            # Idle detection
-            if self._idle_threshold > 0 and self._get_idle_seconds() > self._idle_threshold:
-                if self._state.current_app_id:
-                    self._flush_unlocked(was_idle=True)
+            if self._idle_threshold and idle >= self._idle_threshold:
+                self._close(last_input, was_idle=True)
+                self._status = STATUS_IDLE
                 return
 
-            hwnd = user32.GetForegroundWindow()
-            if not hwnd:
+            fg = self._platform.foreground_app()
+            if fg is None:
+                if self._app_id is not None and now >= self._next_checkpoint:
+                    self._checkpoint(last_input)
                 return
 
-            pid = ctypes.wintypes.DWORD()
-            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-            pid_val = pid.value
-            if not pid_val:
+            # A focus change nobody caused (a popup while the user is away) should
+            # not credit the away time to the previous app.
+            switch_end = last_input if idle >= self.SWITCH_IDLE_SEC else now
+
+            exe = catalog.canonical_exe(fg.exe_name)
+            if not catalog.is_trackable(exe) or exe in self._excluded:
+                self._close(switch_end)
+                self._status = STATUS_WAITING
                 return
 
-            try:
-                proc = psutil.Process(pid_val)
-                exe_name = proc.name().lower()
-                exe_path = proc.exe()
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
+            if exe == self._exe:
+                self._status = STATUS_TRACKING
+                if now >= self._next_checkpoint:
+                    self._checkpoint(last_input)
                 return
 
-            if exe_name in _IGNORED_EXES:
-                return
-
-            # Same app as before → nothing to do
-            if exe_name == self._state.current_exe:
-                return
-
-            # App changed – close old session, open new
-            self._switch_app(exe_name, exe_path, hwnd)
-
-    def _switch_app(self, exe_name: str, exe_path: str, hwnd: int) -> None:
-        now = time.time()
-
-        # Close previous session
-        if self._state.current_session_id is not None:
-            queries.end_session(self._state.current_session_id, now)
-            rollup.rollup_session(self._state.current_session_id)
-
-        # Get or create app
-        app_id = queries.get_or_create_app(exe_name, icon_path=exe_path)
-        session_id = queries.start_session(app_id, now)
-        today = date.today().isoformat()
-        queries.increment_opens(today, app_id)
-
-        # Optional title tracking
-        if self._track_titles:
-            title_hash = self._hash_title(hwnd)
-            queries.log_focus_event(app_id, "focus_in", title_hash)
-
-        self._state.current_app_id = app_id
-        self._state.current_session_id = session_id
-        self._state.current_exe = exe_name
-        self._state.current_start = now
-
-        for cb in self._callbacks:
-            try:
-                cb(app_id, exe_name)
-            except Exception:
-                log.exception("Callback error")
-
-    def _flush(self) -> None:
-        with self._lock:
-            self._flush_unlocked()
-
-    def _flush_unlocked(self, was_idle: bool = False) -> None:
-        if self._state.current_session_id is not None:
-            queries.end_session(self._state.current_session_id, was_idle=was_idle)
-            rollup.rollup_session(self._state.current_session_id)
-        self._state.current_app_id = None
-        self._state.current_session_id = None
-        self._state.current_exe = None
-        self._state.current_start = 0.0
-        for cb in self._callbacks:
-            try:
-                cb(None, None)
-            except Exception:
-                log.exception("Callback error")
+            self._close(switch_end)
+            self._open(exe, fg.exe_path, now)
 
     # ------------------------------------------------------------------
-    # Win32 helpers
+    # Session bookkeeping (call with the lock held)
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _get_idle_seconds() -> float:
-        """Seconds since last user input (keyboard/mouse)."""
+    def _open(self, exe: str, exe_path: str | None, now: float) -> None:
+        self._app_id = queries.get_or_create_app(exe, icon_path=exe_path)
+        self._session_id = queries.start_session(self._app_id, now)
+        self._exe = exe
+        self._session_start = now
+        self._committed_until = now
+        self._next_checkpoint = now + self.CHECKPOINT_SEC
+        self._status = STATUS_TRACKING
 
-        class LASTINPUTINFO(ctypes.Structure):
-            _fields_ = [("cbSize", ctypes.c_uint), ("dwTime", ctypes.c_uint)]
+    def _checkpoint(self, now: float, was_idle: bool = False) -> None:
+        """Commit focus time up to *now* (never moves backwards)."""
+        if self._app_id is None or self._session_id is None:
+            return
+        end = max(now, self._committed_until)
+        if end > self._committed_until:
+            queries.add_focus_span(self._app_id, self._committed_until, end)
+            self._committed_until = end
+        queries.update_session_end(self._session_id, end, was_idle=was_idle)
+        db.commit()
+        self._next_checkpoint = self._clock() + self.CHECKPOINT_SEC
 
-        lii = LASTINPUTINFO()
-        lii.cbSize = ctypes.sizeof(LASTINPUTINFO)
-        if user32.GetLastInputInfo(ctypes.byref(lii)):
-            millis = kernel32.GetTickCount() - lii.dwTime
-            return millis / 1000.0
-        return 0.0
-
-    @staticmethod
-    def _is_locked() -> bool:
-        """Check if the workstation is locked."""
-        # OpenInputDesktop returns NULL when desktop is locked / switched
-        hdesk = user32.OpenInputDesktop(0, False, 0x0001)  # DESKTOP_READOBJECTS
-        if hdesk:
-            user32.CloseDesktop(hdesk)
-            return False
-        return True
-
-    @staticmethod
-    def _hash_title(hwnd: int) -> str:
-        buf = ctypes.create_unicode_buffer(512)
-        user32.GetWindowTextW(hwnd, buf, 512)
-        return hashlib.sha256(buf.value.encode()).hexdigest()[:16]
+    def _close(self, end: float, was_idle: bool = False) -> None:
+        if self._app_id is None:
+            return
+        try:
+            self._checkpoint(end, was_idle=was_idle)
+        finally:
+            self._app_id = None
+            self._exe = None
+            self._session_id = None
+            self._session_start = 0.0
+            self._committed_until = 0.0

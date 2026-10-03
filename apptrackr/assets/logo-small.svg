@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <!-- Simplified mark for 16-32 px: major ticks only, heavier strokes. -->
+  <rect width="256" height="256" rx="56" fill="#141412"/>
+  <rect x="3" y="3" width="250" height="250" rx="53" fill="none" stroke="#ffffff" stroke-opacity="0.16" stroke-width="6"/>
+  <line x1="128.0" y1="50.0" x2="128.0" y2="32.0" stroke="#edebe4" stroke-width="20" stroke-linecap="round"/><line x1="206.0" y1="128.0" x2="224.0" y2="128.0" stroke="#edebe4" stroke-width="20" stroke-linecap="round"/><line x1="128.0" y1="206.0" x2="128.0" y2="224.0" stroke="#edebe4" stroke-width="20" stroke-linecap="round"/><line x1="50.0" y1="128.0" x2="32.0" y2="128.0" stroke="#edebe4" stroke-width="20" stroke-linecap="round"/>
+  <path d="M128 128 L128 64 A64 64 0 0 1 169.1 177.0 Z" fill="#ff6b1a"/>
+  <line x1="128" y1="128" x2="167.9" y2="175.5" stroke="#edebe4" stroke-width="18" stroke-linecap="round"/>
+  <circle cx="128" cy="128" r="15" fill="#edebe4"/>
+</svg>

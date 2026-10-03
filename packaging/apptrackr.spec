@@ -1,58 +1,47 @@
 # -*- mode: python ; coding: utf-8 -*-
-# PyInstaller spec for AppTrackr
+# PyInstaller spec for AppTrackr. Build from the repository root:
+#   pyinstaller packaging/apptrackr.spec
 
 import os
-import sys
 
-block_cipher = None
 ROOT = os.path.abspath(os.getcwd())
+PKG = os.path.join(ROOT, "apptrackr")
 
 a = Analysis(
-    [os.path.join(ROOT, 'apptrackr', '__main__.py')],
+    [os.path.join(PKG, "__main__.py")],
     pathex=[ROOT],
     binaries=[],
     datas=[
-        (os.path.join(ROOT, 'apptrackr', 'data', 'schema.sql'), os.path.join('apptrackr', 'data')),
+        (os.path.join(PKG, "data", "schema.sql"), os.path.join("apptrackr", "data")),
+        (os.path.join(PKG, "assets"), os.path.join("apptrackr", "assets")),
     ],
-    hiddenimports=[
-        'PySide6.QtWidgets',
-        'PySide6.QtCore',
-        'PySide6.QtGui',
-        'psutil',
-    ],
+    hiddenimports=["PySide6.QtSvg", "PySide6.QtNetwork", "pynput.mouse._win32"],
     hookspath=[],
-    hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
-    win_no_prefer_redirects=False,
-    win_private_assemblies=False,
-    cipher=block_cipher,
+    excludes=["tkinter", "PySide6.QtWebEngineCore", "PySide6.QtQml", "PySide6.QtQuick", "PySide6.Qt3DCore"],
     noarchive=False,
 )
 
-pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+pyz = PYZ(a.pure, a.zipped_data)
 
 exe = EXE(
     pyz,
     a.scripts,
     [],
     exclude_binaries=True,
-    name='AppTrackr',
+    name="AppTrackr",
     debug=False,
-    bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,
     console=False,
-    icon=None,  # Add .ico path here when available
+    icon=os.path.join(ROOT, "packaging", "apptrackr.ico"),
 )
 
 coll = COLLECT(
     exe,
     a.binaries,
-    a.zipfiles,
     a.datas,
     strip=False,
-    upx=True,
-    upx_exclude=[],
-    name='AppTrackr',
+    upx=False,
+    name="AppTrackr",
 )

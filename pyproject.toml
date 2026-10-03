@@ -1,30 +1,69 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "apptrackr"
-version = "1.0.0"
-description = "Desktop app usage time tracker with neon UI and gamification"
+dynamic = ["version"]
+description = "Foreground app usage tracker for Windows with a calendar, per-app limits and an optional rewards game"
+readme = "README.md"
+license = { text = "MIT" }
 requires-python = ">=3.10"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: Microsoft :: Windows",
+    "Environment :: Win32 (MS Windows)",
+    "Intended Audience :: End Users/Desktop",
+    "Topic :: Utilities",
+]
 dependencies = [
     "PySide6>=6.6",
-    "pywin32>=306",
     "psutil>=5.9",
-    "pynput>=1.7",
+    "pynput>=1.7; sys_platform == 'win32'",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pyinstaller>=6.0",
-    "pytest>=7.0",
+    "pytest>=8.0",
+    "ruff>=0.6",
+    "pillow>=10",  # scripts/record_demo.py
+    "pyinstaller>=6.0; sys_platform == 'win32'",
 ]
+
+[project.urls]
+Homepage = "https://github.com/H4ch1Net/AppTrackr"
+Issues = "https://github.com/H4ch1Net/AppTrackr/issues"
 
 [project.scripts]
 apptrackr = "apptrackr.__main__:main"
 
-[build-system]
-requires = ["setuptools>=68.0", "wheel"]
-build-backend = "setuptools.build_meta"
+[tool.setuptools.dynamic]
+version = { attr = "apptrackr.__version__" }
 
 [tool.setuptools.packages.find]
 include = ["apptrackr*"]
 
 [tool.setuptools.package-data]
-apptrackr = ["data/schema.sql"]
+apptrackr = [
+    "data/schema.sql",
+    "assets/*.svg",
+    "assets/icons/*",
+    "assets/illustrations/*",
+    "assets/fonts/*",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "UP", "I"]
+ignore = ["UP035"]  # typing.Callable is fine on 3.10
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011"]
+"apptrackr/ui/theme.py" = ["E501"]  # stylesheet text

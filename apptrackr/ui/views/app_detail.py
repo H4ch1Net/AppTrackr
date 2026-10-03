@@ -1,217 +1,373 @@
-"""App detail view – trends, history histogram, goals."""
+"""App detail: totals, 30-day history, limit, rewards and recent sessions for one app."""
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor, QPainter, QPen
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QScrollArea, QFrame, QCheckBox,
+    QComboBox,
+    QGridLayout,
+    QHBoxLayout,
+    QInputDialog,
+    QMenu,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
 )
 
-from .. import theme
-from ..widgets.components import NeonCard, StatValue, GradientBar
-from ...data import queries
+from ...data import catalog, queries
+from ...rewards import engine as rewards
+from ...rewards import rules
+from .. import fmt, motion
+from ..signals import bus
+from ..widgets.charts import Bar, BarChart
+from ..widgets.components import (
+    AppAvatar,
+    Card,
+    EmptyState,
+    IconBinding,
+    MetricGrid,
+    Page,
+    SettingRow,
+    StatTile,
+    Toggle,
+    button,
+    clear_layout,
+    divider,
+    eyebrow,
+    label,
+)
+
+LIMITS = (
+    ("No limit", 0),
+    ("15 minutes", 15),
+    ("30 minutes", 30),
+    ("45 minutes", 45),
+    ("1 hour", 60),
+    ("1.5 hours", 90),
+    ("2 hours", 120),
+    ("3 hours", 180),
+    ("4 hours", 240),
+    ("6 hours", 360),
+)
+MINUTE = 60_000
 
 
-class BarChartWidget(QWidget):
-    """Simple bar chart for daily history."""
-
-    def __init__(self, parent=None):
+class AppDetailView(Page):
+    def __init__(self, ctx, parent=None):
         super().__init__(parent)
-        self._data: list[tuple[str, int]] = []  # (day, ms)
-        self.setMinimumHeight(160)
-        self.setStyleSheet("background: transparent;")
+        self.setObjectName("page")
+        self.ctx = ctx
+        self.app_id: int | None = None
 
-    def set_data(self, data: list[tuple[str, int]]):
-        self._data = data
-        self.update()
+        self.back = button("Back", kind="ghost", icon="arrow-left", tooltip="Back (Esc)", on_click=ctx.window.go_back)
+        back_row = QHBoxLayout()
+        back_row.addWidget(self.back)
+        back_row.addStretch(1)
+        self.add(back_row)
 
-    def paintEvent(self, event):
-        if not self._data:
+        head = QHBoxLayout()
+        head.setSpacing(14)
+        self.avatar = AppAvatar("", None, 48)
+        head.addWidget(self.avatar)
+        names = QVBoxLayout()
+        names.setSpacing(3)
+        self.kicker = label("", "eyebrowAccent")
+        names.addWidget(self.kicker)
+        self.title = label("", "title")
+        names.addWidget(self.title)
+        self.subtitle = label("", "subtitle")
+        self.subtitle.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        names.addWidget(self.subtitle)
+        head.addLayout(names, 1)
+        self.fav_btn = QPushButton("Favorite")
+        self.fav_btn.setCheckable(True)
+        self.fav_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.fav_btn.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+        IconBinding.attach(self.fav_btn, "star", "text_dim", checked_tone="gold")
+        self.fav_btn.clicked.connect(self._toggle_favorite)
+        head.addWidget(self.fav_btn)
+        self.more_btn = button("", icon="ellipsis", tooltip="More actions")
+        self.more_btn.clicked.connect(self._more_menu)
+        head.addWidget(self.more_btn)
+        self.add(head)
+
+        self.t_today = StatTile("Today", framed=False)
+        self.t_week = StatTile("Last 7 days", framed=False)
+        self.t_month = StatTile("Last 30 days", framed=False)
+        self.t_avg = StatTile("Daily average", framed=False)
+        self.add(MetricGrid([self.t_today, self.t_week, self.t_month, self.t_avg], columns=4))
+
+        self.chart_card = Card("Last 30 days", "Focused time per day", index=1)
+        self.chart = BarChart(180)
+        self.chart_card.body.addWidget(self.chart)
+        self.add(self.chart_card)
+
+        cols = self.stack_when_narrow(QHBoxLayout())
+        cols.setSpacing(16)
+        left = QVBoxLayout()
+        left.setSpacing(16)
+
+        self.settings_card = Card("Settings", index=2)
+        self.category = QComboBox()
+        self.category.addItem("Uncategorized", None)
+        for cat in queries.CATEGORIES:
+            self.category.addItem(cat, cat)
+        self.category.currentIndexChanged.connect(self._on_category)
+        self.settings_card.body.addWidget(
+            SettingRow("Category", "Groups apps on the dashboard and in filters.", self.category)
+        )
+        self.settings_card.body.addWidget(divider())
+        self.limit = QComboBox()
+        for text, minutes in LIMITS:
+            self.limit.addItem(text, minutes)
+        self.limit.currentIndexChanged.connect(self._on_limit)
+        self.settings_card.body.addWidget(
+            SettingRow("Daily limit", "Get a notification once today's time passes it.", self.limit)
+        )
+        self.rewards_divider = divider()
+        self.settings_card.body.addWidget(self.rewards_divider)
+        self.rewards_toggle = Toggle()
+        self.rewards_toggle.toggled.connect(self._on_rewards)
+        self.rewards_row = SettingRow(
+            "Earn rewards", "Time in this app earns XP and village resources.", self.rewards_toggle
+        )
+        self.settings_card.body.addWidget(self.rewards_row)
+        self.reward_hint = label("", "caption", wrap=True)
+        self.settings_card.body.addWidget(self.reward_hint)
+        left.addWidget(self.settings_card)
+
+        self.facts = Card("Details", index=4)
+        self.facts_grid = QGridLayout()
+        self.facts_grid.setHorizontalSpacing(16)
+        self.facts_grid.setVerticalSpacing(8)
+        self.facts.body.addLayout(self.facts_grid)
+        left.addWidget(self.facts)
+        left.addStretch(1)
+        cols.addLayout(left, 1)
+
+        self.sessions_card = Card("Recent sessions", "Each continuous stretch of focus", index=3)
+        self.sessions = QVBoxLayout()
+        self.sessions.setSpacing(0)
+        self.sessions_card.body.addLayout(self.sessions)
+        self.sessions_card.body.addStretch(1)
+        cols.addWidget(self.sessions_card, 1)
+        self.add(cols)
+        self.layout_.addStretch(1)
+
+    # ------------------------------------------------------------------
+
+    def load_app(self, app_id: int) -> None:
+        if app_id != self.app_id:
+            for tile in (self.t_today, self.t_week, self.t_month, self.t_avg):
+                tile.reset()
+        self.app_id = app_id
+        self.verticalScrollBar().setValue(0)
+        self.reload(animate=True)
+
+    def reload(self, animate: bool = False) -> None:
+        if self.app_id is None:
             return
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-
-        w = self.width()
-        h = self.height()
-        margin_bottom = 24
-        chart_h = h - margin_bottom
-        n = len(self._data)
-        bar_w = max(min((w - 20) // max(n, 1), 24), 4)
-        gap = max(bar_w // 4, 1)
-        max_val = max(v for _, v in self._data) if self._data else 1
-
-        x = 10
-        for day_str, ms in self._data:
-            bar_h = max(int((ms / max(max_val, 1)) * (chart_h - 10)), 0)
-            # Gradient bar
-            c = QColor(theme.get_accent())
-            c.setAlphaF(0.3 + 0.7 * min(ms / max(max_val, 1), 1.0))
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(c)
-            p.drawRoundedRect(x, chart_h - bar_h, bar_w, bar_h, 2, 2)
-
-            # Day label (show every few)
-            if n <= 14 or self._data.index((day_str, ms)) % (n // 7 or 1) == 0:
-                p.setPen(QColor(theme.TEXT_MUTED))
-                from PySide6.QtGui import QFont
-                p.setFont(QFont("Segoe UI", 7))
-                day_short = day_str[5:]  # MM-DD
-                p.drawText(x, h - 4, day_short)
-
-            x += bar_w + gap
-        p.end()
-
-
-class AppDetailView(QWidget):
-    """Detailed view for a single app."""
-
-    back_clicked = Signal()
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._app_id: int | None = None
-        self._build_ui()
-
-    def _build_ui(self):
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 24, 24, 24)
-        layout.setSpacing(16)
-
-        # Back button + title
-        top_row = QHBoxLayout()
-        back_btn = QPushButton("← Back")
-        back_btn.clicked.connect(self.back_clicked.emit)
-        top_row.addWidget(back_btn)
-
-        self._title = QLabel("App Details")
-        self._title.setObjectName("heading")
-        top_row.addWidget(self._title, stretch=1)
-
-        self._fav_btn = QPushButton("☆ Favorite")
-        self._fav_btn.clicked.connect(self._toggle_fav)
-        top_row.addWidget(self._fav_btn)
-        layout.addLayout(top_row)
-
-        # Stats cards
-        stats_row = QHBoxLayout()
-        self._total_7d = StatValue("0m", "7-Day Total", theme.get_accent())
-        self._total_30d = StatValue("0m", "30-Day Total", theme.PURPLE)
-        self._opens_stat = StatValue("0", "Opens (7d)", theme.BLUE)
-        self._clicks_stat = StatValue("0", "Clicks (7d)", theme.PINK)
-
-        for w in (self._total_7d, self._total_30d, self._opens_stat, self._clicks_stat):
-            card = NeonCard(glow_color=theme.BG_CARD)
-            card.content_layout().addWidget(w)
-            stats_row.addWidget(card)
-        layout.addLayout(stats_row)
-
-        # Chart
-        chart_card = NeonCard(glow_color=theme.BG_CARD, title="DAILY USAGE (30 DAYS)")
-        self._chart = BarChartWidget()
-        chart_card.content_layout().addWidget(self._chart)
-        layout.addWidget(chart_card)
-
-        # Category
-        cat_row = QHBoxLayout()
-        cat_label = QLabel("Category:")
-        cat_label.setStyleSheet(f"color: {theme.TEXT_DIM}; background: transparent;")
-        cat_row.addWidget(cat_label)
-        from PySide6.QtWidgets import QComboBox
-        self._category = QComboBox()
-        self._category.addItems(["None", "Work", "Study", "Games", "Social", "Entertainment", "Tools"])
-        self._category.currentTextChanged.connect(self._on_category_change)
-        cat_row.addWidget(self._category)
-        cat_row.addStretch()
-        layout.addLayout(cat_row)
-
-        # Rewards toggle
-        rewards_card = NeonCard(glow_color=theme.BG_CARD, title="REWARDS")
-        rewards_layout = rewards_card.content_layout()
-        
-        self._rewards_check = QCheckBox("Enable rewards for this app")
-        self._rewards_check.setStyleSheet(f"color: {theme.TEXT}; font-size: 13px;")
-        self._rewards_check.stateChanged.connect(self._on_rewards_toggle)
-        rewards_layout.addWidget(self._rewards_check)
-        
-        rewards_info = QLabel("When enabled, time spent in this app will generate XP and resources.")
-        rewards_info.setWordWrap(True)
-        rewards_info.setStyleSheet(f"color: {theme.TEXT_MUTED}; font-size: 11px; background: transparent;")
-        rewards_layout.addWidget(rewards_info)
-        
-        layout.addWidget(rewards_card)
-
-        layout.addStretch()
-
-    def load_app(self, app_id: int):
-        self._app_id = app_id
-        app = queries.get_app(app_id)
+        app = queries.get_app(self.app_id)
         if not app:
+            self.ctx.window.go_back()
             return
+        self.back.setText(f"Back to {self.ctx.window.back_label()}")
+        self.avatar.set_app(app["name"], app.get("icon_path"))
+        self.title.setText(app["name"])
+        self.kicker.setText(app.get("category") or "Uncategorized")
+        self.subtitle.setText(app["exe_name"] + (f"  ·  {app['icon_path']}" if app.get("icon_path") else ""))
+        self.fav_btn.setChecked(bool(app.get("is_favorite")))
+        self.fav_btn.setText("Favorite" if app.get("is_favorite") else "Add to favorites")
 
-        self._title.setText(app.get("display_name") or app["exe_name"])
+        self._set_combo(self.category, app.get("category"))
+        limit_minutes = (app.get("daily_limit_ms") or 0) // MINUTE
+        if self.limit.findData(limit_minutes) < 0:
+            self.limit.addItem(fmt.duration(limit_minutes * MINUTE), limit_minutes)
+        self._set_combo(self.limit, limit_minutes)
 
-        # Favorite button
-        is_fav = bool(app.get("is_favorite"))
-        self._fav_btn.setText("★ Favorited" if is_fav else "☆ Favorite")
-        self._fav_btn.setStyleSheet(
-            f"color: {theme.YELLOW};" if is_fav else ""
+        on = rewards.enabled()
+        for w in (self.rewards_divider, self.rewards_row, self.reward_hint):
+            w.setVisible(on)
+        self.rewards_toggle.set_silently(rules.app_rewards_enabled(self.app_id))
+        self._update_reward_hint()
+
+        history = queries.app_daily_history(self.app_id, 30)
+        snap = self.ctx.snapshot()
+        live = snap.uncommitted_ms if snap.app_id == self.app_id else 0
+        history[-1]["focused_ms"] += live
+        week = history[-7:]
+        total_30 = sum(h["focused_ms"] for h in history)
+        active = [h for h in history if h["focused_ms"] > 0]
+        limit_ms = app.get("daily_limit_ms")
+        today_ms = history[-1]["focused_ms"]
+
+        self.t_today.set_number(
+            today_ms,
+            _short,
+            (
+                f"of {fmt.duration(limit_ms, short=True)} limit"
+                if limit_ms
+                else f"{history[-1]['opens_count']} launches"
+            ),
+            "danger" if limit_ms and today_ms >= limit_ms else "caption",
+        )
+        self.t_week.set_number(
+            sum(h["focused_ms"] for h in week), _short, f"{sum(h['opens_count'] for h in week)} launches"
+        )
+        self.t_month.set_number(total_30, _short, f"{len(active)} active days")
+        self.t_avg.set_number(total_30 / len(active) if active else 0, _short, "per active day, last 30 days")
+
+        self.chart.set_data(
+            [
+                Bar(
+                    str(date.fromisoformat(h["day"]).day) if i % 3 == 2 or i == 29 else "",
+                    h["focused_ms"],
+                    f"{fmt.long_date(h['day'])}\n{fmt.duration(h['focused_ms'])}"
+                    + (f" · {h['opens_count']} launches" if h["opens_count"] else ""),
+                )
+                for i, h in enumerate(history)
+            ],
+            highlight=29,
+            limit=limit_ms,
+            empty_text="No activity in the last 30 days",
+        )
+        self.chart_card.set_caption(
+            "Focused time per day"
+            + (f" · dashed line is your {fmt.duration(limit_ms, short=True)} limit" if limit_ms else "")
         )
 
-        # Category
-        cat = app.get("category") or "None"
-        idx = self._category.findText(cat)
-        if idx >= 0:
-            self._category.blockSignals(True)
-            self._category.setCurrentIndex(idx)
-            self._category.blockSignals(False)
-        
-        # Rewards enabled
-        from ...rewards import rules as reward_rules
-        reward_rules.ensure_app_rules(app_id)
-        enabled = reward_rules.app_rewards_enabled(app_id)
-        self._rewards_check.blockSignals(True)
-        self._rewards_check.setChecked(enabled)
-        self._rewards_check.blockSignals(False)
+        self._fill_facts(app)
+        self._fill_sessions(animate)
 
-        # Stats
-        hist_30 = queries.app_daily_history(app_id, days=30)
-        hist_7 = [h for h in hist_30 if h["day"] >= (date.today() - timedelta(days=7)).isoformat()]
+    def _fill_facts(self, app: dict) -> None:
+        clear_layout(self.facts_grid)
+        summary = queries.app_summary(self.app_id)
+        facts = [
+            ("First seen", fmt.relative_day(summary["first_day"])),
+            ("Last used", fmt.relative_day(summary["last_day"])),
+            ("All-time total", fmt.duration(summary["total_ms"], short=True)),
+            ("Active days", str(summary["active_days"])),
+            ("Longest session", fmt.duration(summary["longest_session_ms"], short=True)),
+            ("Executable", app["exe_name"]),
+        ]
+        for row, (name, value) in enumerate(facts):
+            self.facts_grid.addWidget(eyebrow(name), row, 0)
+            val = label(value)
+            val.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            self.facts_grid.addWidget(val, row, 1)
+        self.facts_grid.setColumnStretch(1, 1)
 
-        total_7 = sum(h.get("focused_ms", 0) for h in hist_7)
-        total_30 = sum(h.get("focused_ms", 0) for h in hist_30)
-        opens_7 = sum(h.get("opens_count", 0) for h in hist_7)
-        clicks_7 = sum(h.get("clicks_count", 0) for h in hist_7)
-
-        self._total_7d.set_value(theme.format_ms(total_7))
-        self._total_30d.set_value(theme.format_ms(total_30))
-        self._opens_stat.set_value(str(opens_7))
-        self._clicks_stat.set_value(str(clicks_7))
-
-        # Chart
-        chart_data = [(h["day"], h.get("focused_ms", 0)) for h in hist_30]
-        self._chart.set_data(chart_data)
-
-    def _toggle_fav(self):
-        if self._app_id is None:
+    def _fill_sessions(self, animate: bool = False) -> None:
+        clear_layout(self.sessions)
+        added: list[QWidget] = []
+        sessions = queries.recent_sessions(self.app_id, limit=12)
+        if not sessions:
+            self.sessions.addWidget(EmptyState("clock", "No sessions yet"))
             return
-        app = queries.get_app(self._app_id)
-        if not app:
-            return
-        new_fav = not bool(app.get("is_favorite"))
-        queries.set_favorite(self._app_id, new_fav)
-        self.load_app(self._app_id)
+        last_day = None
+        for s in sessions:
+            day = datetime.fromtimestamp(s["start_ts"]).date()
+            if day != last_day:
+                heading = label(
+                    fmt.relative_day(day).upper() if (date.today() - day).days < 2 else fmt.long_date(day).upper(),
+                    "eyebrow",
+                )
+                heading.setContentsMargins(0, 10 if last_day else 0, 0, 4)
+                self.sessions.addWidget(heading)
+                added.append(heading)
+                last_day = day
+            row = QWidget()
+            lay = QHBoxLayout(row)
+            lay.setContentsMargins(0, 5, 0, 5)
+            lay.addWidget(label(f"{fmt.time_of_day(s['start_ts'])} – {fmt.time_of_day(s['end_ts'])}", "dim"))
+            if s["was_idle"]:
+                tag = label("then idle", "pill")
+                tag.setToolTip("This session ended because there was no input for the idle timeout.")
+                lay.addWidget(tag)
+            lay.addStretch(1)
+            dur = label(fmt.duration(s["duration_ms"], short=True))
+            dur.setStyleSheet("font-weight: 600;")
+            lay.addWidget(dur)
+            self.sessions.addWidget(row)
+            added.append(row)
+        if animate:
+            motion.stagger_in(added, step=16, limit=16)
 
-    def _on_category_change(self, text):
-        if self._app_id is None:
+    def _update_reward_hint(self) -> None:
+        if not self.rewards_toggle.isChecked():
+            self.reward_hint.setText("")
+            self.reward_hint.hide()
             return
-        queries.set_category(self._app_id, text if text != "None" else None)
-    
-    def _on_rewards_toggle(self, state):
-        if self._app_id is None:
+        item = next((m for m in rewards.next_milestones() if m["app_id"] == self.app_id), None)
+        if item and item["next"]:
+            nxt = item["next"]
+            self.reward_hint.setText(
+                f"Next milestone at {fmt.duration(nxt['target_ms'], short=True)} today "
+                f"({fmt.duration(item['focused_ms'], short=True)} so far): {fmt.reward(nxt['reward'], ', ')}"
+            )
+        else:
+            self.reward_hint.setText("All of today's milestones are done.")
+        self.reward_hint.setVisible(rewards.enabled())
+
+    # ------------------------------------------------------------------
+    # Actions
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _set_combo(combo: QComboBox, data) -> None:
+        idx = combo.findData(data)
+        combo.blockSignals(True)
+        combo.setCurrentIndex(max(0, idx))
+        combo.blockSignals(False)
+
+    def _toggle_favorite(self) -> None:
+        queries.set_favorite(self.app_id, self.fav_btn.isChecked())
+        bus.data_changed.emit()
+        self.reload()
+
+    def _on_category(self) -> None:
+        if self.app_id is not None:
+            queries.set_category(self.app_id, self.category.currentData())
+            bus.data_changed.emit()
+
+    def _on_limit(self) -> None:
+        if self.app_id is None:
             return
-        from ...rewards import rules as reward_rules
-        reward_rules.enable_app_rewards(self._app_id, bool(state))
+        minutes = self.limit.currentData() or 0
+        queries.set_daily_limit(self.app_id, minutes * MINUTE)
+        bus.data_changed.emit()
+        self.ctx.toast(f"Daily limit set to {fmt.duration(minutes * MINUTE)}" if minutes else "Daily limit removed")
+        self.reload()
+
+    def _on_rewards(self, on: bool) -> None:
+        if self.app_id is None:
+            return
+        rules.enable_app_rewards(self.app_id, on)
+        bus.rewards_changed.emit()
+        self._update_reward_hint()
+
+    def _more_menu(self) -> None:
+        menu = QMenu(self)
+        menu.addAction("Rename…", self._rename)
+        menu.addAction("Reset name", lambda: self._apply_name(None))
+        menu.addSeparator()
+        menu.addAction("Exclude from tracking", lambda: self.ctx.window.exclude_app(self.app_id))
+        menu.exec(self.more_btn.mapToGlobal(self.more_btn.rect().bottomLeft()))
+
+    def _rename(self) -> None:
+        app = queries.get_app(self.app_id)
+        name, ok = QInputDialog.getText(self, "Rename app", f"Display name for {app['exe_name']}:", text=app["name"])
+        if ok:
+            self._apply_name(name)
+
+    def _apply_name(self, name: str | None) -> None:
+        app = queries.get_app(self.app_id)
+        queries.set_display_name(self.app_id, name or catalog.friendly_name(app["exe_name"]))
+        bus.data_changed.emit()
+        self.reload()
+
+
+def _short(ms: float) -> str:
+    return fmt.duration(ms, short=True)
