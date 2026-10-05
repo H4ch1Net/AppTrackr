@@ -249,6 +249,9 @@ git tag v1.1.0
 git push origin v1.1.0
 ```
 
+Or, without a local tag: *Actions > Release Windows Build > Run workflow* on `main` with *Publish* ticked.
+The workflow tags `v<version>` on that commit and publishes the release.
+
 `.github/workflows/release-windows.yml` checks that the tag matches the version and that the release notes
 exist, runs the tests, builds the PyInstaller bundle, self-tests it, packages the portable zip and the Inno
 Setup installer, and publishes both with the notes as the GitHub release. `ci.yml` runs lint and tests on Windows and Linux for every push and pull request.
