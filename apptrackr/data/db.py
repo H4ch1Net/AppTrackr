@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 import threading
+import time
 from pathlib import Path
 from typing import Any, Callable
 
@@ -73,20 +74,58 @@ def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
 
 
 def init_db() -> None:
-    """Create the schema on first run and migrate older databases."""
+    """Create the schema on first run and migrate older databases.
+
+    Before migrating, the database is copied next to itself (see backup_path), and
+    all migrations run in one transaction: an upgrade either completes or leaves the
+    database exactly as the previous version wrote it.
+    """
     conn = get_connection()
     fresh = not _table_exists(conn, "apps")
+    version = SCHEMA_VERSION if fresh else conn.execute("PRAGMA user_version").fetchone()[0]
+    pending = [(target, migrate) for target, migrate in _MIGRATIONS if version < target]
+    if pending:
+        _backup(conn, version)
     conn.executescript(_SCHEMA.read_text(encoding="utf-8"))
-    version = conn.execute("PRAGMA user_version").fetchone()[0]
-    if fresh:
-        version = SCHEMA_VERSION
-    for target, migrate in _MIGRATIONS:
-        if version < target:
-            log.info("Migrating database to schema v%d", target)
+    if not pending:
+        if fresh:
+            conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        conn.commit()  # a database from a newer version keeps its higher user_version
+        return
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        for target, migrate in pending:
+            log.info("Migrating database from schema v%d to v%d", version, target)
             migrate(conn)
             version = target
-    conn.execute(f"PRAGMA user_version = {int(version)}")
-    conn.commit()
+        conn.execute(f"PRAGMA user_version = {int(version)}")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        log.exception("Database migration failed; the database was left unchanged")
+        raise
+
+
+def backup_path(version: int) -> Path:
+    """Where the pre-upgrade copy of a schema *version* database is kept."""
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    return db_path().with_name(f"data-backup-schema{version}-{stamp}.sqlite")
+
+
+def _backup(conn: sqlite3.Connection, version: int) -> Path | None:
+    """Copy the database before an upgrade touches it. A failed copy is logged, not fatal."""
+    target = backup_path(version)
+    try:
+        dest = sqlite3.connect(str(target))
+        try:
+            conn.backup(dest)
+        finally:
+            dest.close()
+        log.info("Backed up the database to %s before upgrading", target)
+        return target
+    except (sqlite3.Error, OSError):
+        log.exception("Could not back up the database before upgrading")
+        return None
 
 
 # ---------------------------------------------------------------------------

@@ -125,7 +125,24 @@ def main(argv: list[str] | None = None) -> int:
     from apptrackr.data import db
     from apptrackr.ui.main import MainWindow, prepare_app
 
-    db.init_db()
+    try:
+        db.init_db()
+    except Exception:
+        log.exception("Could not open or upgrade the database")
+        from PySide6.QtWidgets import QMessageBox
+
+        QMessageBox.critical(
+            None,
+            APP_NAME,
+            "AppTrackr could not open or upgrade its data, so it did not start. Your data was not changed, "
+            f"and a backup copy is kept next to it in:\n{paths.data_dir()}\n\n"
+            f"Details are in the log:\n{paths.log_dir()}",
+        )
+        return 1
+    if not args.demo:
+        from apptrackr.core import autostart
+
+        autostart.repair()
     if args.demo:
         from apptrackr.data import demo
 
@@ -163,6 +180,8 @@ def main(argv: list[str] | None = None) -> int:
             shutil.rmtree(paths.data_dir(), ignore_errors=True)
 
     app.aboutToQuit.connect(shutdown)
+    # Windows sign-out and installers closing the app (Restart Manager) ask to save first.
+    app.commitDataRequest.connect(lambda *_: tracker.flush())
     log.info("%s %s started (data: %s)", APP_NAME, __version__, paths.data_dir())
     return app.exec()
 

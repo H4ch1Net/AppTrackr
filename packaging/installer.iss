@@ -33,6 +33,11 @@ WizardStyle=modern
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Shortcuts:"
 Name: "autostart"; Description: "Start AppTrackr when I sign in"; GroupDescription: "Startup:"
 
+[InstallDelete]
+; Replace the previous build's runtime wholesale so files from an older version never mix with this one.
+; User data lives in %APPDATA%\AppTrackr and is not touched.
+Type: filesandordirs; Name: "{app}\_internal"
+
 [Files]
 Source: "..\dist\AppTrackr\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 

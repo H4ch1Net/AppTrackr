@@ -100,7 +100,29 @@ Download the latest build from [Releases](https://github.com/H4ch1Net/AppTrackr/
 | `AppTrackr_Setup.exe` | You want Start Menu entries, optional sign-in startup and uninstall support. Installs per user, no admin rights needed. |
 | `AppTrackr_Portable.zip` | You want to run it from a folder. Extract anywhere and start `AppTrackr.exe`. |
 
-Requirements: Windows 10 or 11 (64-bit). Upgrading over v1.0 keeps your data and migrates it on first start.
+Requirements: Windows 10 or 11 (64-bit).
+
+### Upgrading
+
+Every version keeps your data in `%APPDATA%\AppTrackr`, and installers and portable builds of any
+version read the same folder, so upgrading never starts you from zero.
+
+- **From 1.1 or later.** AppTrackr checks GitHub once a day. Choose *Download and install* in Settings;
+  the installer replaces the old build and starts the new one, and tracking picks up where it stopped.
+- **From 1.0.x.** Run the new `AppTrackr_Setup.exe`. It installs over 1.0 in the same folder, closes the
+  running copy and keeps the Start Menu and sign-in entries. To update from inside 1.0 instead, paste
+  `https://api.github.com/repos/H4ch1Net/AppTrackr/releases/latest` into *Settings > Updates > Update feed
+  URL* (1.0 ships without one) and press *Check for Updates*.
+- **Portable.** Extract the new zip anywhere, or over the old folder, and start it. Data stays in `%APPDATA%`.
+
+On the first start after an upgrade that changes the database, AppTrackr copies it to
+`data-backup-schema<N>-<date>.sqlite` in the same folder and then upgrades it in a single transaction:
+either everything is converted or nothing changes. Upgrading from 1.0 keeps every app, finished session, open
+and click count, reward, building and setting, and rebuilds daily totals from the raw sessions, which also
+recovers time 1.0 left out (sessions that ended in idle, and sessions that ran past midnight). Sign-in
+entries made by 1.0 are updated to start in the tray. If an upgrade ever fails, AppTrackr says so, leaves
+the data as it was and points to the backup and the log. `tests/test_upgrade.py` runs this upgrade on a
+database written by v1.0.2's own code.
 
 ## Usage
 
@@ -269,8 +291,8 @@ flowchart LR
 - **Nothing is tracked.** Check the tracking module at the bottom of the sidebar. *Paused* resumes on click. *Idle* means no
   input for the idle timeout. Apps you excluded are listed in Settings.
 - **An app shows up under an odd name.** Open it and use the menu next to *Favorite* to rename it.
-- **The window opens at sign-in instead of staying in the tray.** Startup entries created by v1.0 lack
-  `--minimized`. Turn *Launch at startup* off and on again in Settings to rewrite the entry.
+- **The window opens at sign-in instead of staying in the tray.** Start AppTrackr once; it updates startup
+  entries left by older versions. If that does not help, turn *Launch at startup* off and on in Settings.
 - **Something broke.** Run with `--debug` and look at `%APPDATA%\AppTrackr\logs\apptrackr.log`, then
   [open an issue](https://github.com/H4ch1Net/AppTrackr/issues) with the relevant lines.
 
