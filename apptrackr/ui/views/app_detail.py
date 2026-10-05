@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ... import perspective
 from ...data import catalog, queries
 from ...rewards import engine as rewards
 from ...rewards import rules
@@ -258,6 +259,15 @@ class AppDetailView(Page):
             self.facts_grid.addWidget(eyebrow(name), row, 0)
             val = label(value)
             val.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            self.facts_grid.addWidget(val, row, 1)
+        # The all-time total retold: a different yardstick for each app.
+        retold = perspective.pick(summary["total_ms"] / 60000, 1, offset=self.app_id or 0)
+        if retold:
+            fact = retold[0]
+            row = len(facts)
+            self.facts_grid.addWidget(eyebrow("In other terms"), row, 0, Qt.AlignmentFlag.AlignTop)
+            val = label(f"About {fact.value} {fact.label}", wrap=True)
+            val.setToolTip(fact.basis)
             self.facts_grid.addWidget(val, row, 1)
         self.facts_grid.setColumnStretch(1, 1)
 

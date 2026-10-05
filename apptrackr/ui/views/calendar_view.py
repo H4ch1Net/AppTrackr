@@ -25,6 +25,7 @@ from ..widgets.components import (
     eyebrow,
     label,
 )
+from ..widgets.rolling import RollingLabel
 
 
 class CalendarView(Page):
@@ -69,7 +70,7 @@ class CalendarView(Page):
             box = QVBoxLayout()
             box.setSpacing(3)
             box.addWidget(eyebrow(caption))
-            value = label("–")
+            value = RollingLabel("–")
             value.setFont(fonts.sans(15, 600, tabular=True))
             box.addWidget(value)
             self.stat_labels[key] = value
@@ -130,14 +131,14 @@ class CalendarView(Page):
 
         total = sum(totals.values())
         active = [v for v in totals.values() if v > 0]
-        self.stat_labels["total"].setText(fmt.duration(total, short=True))
-        self.stat_labels["avg"].setText(fmt.duration(total / len(active), short=True) if active else "–")
-        self.stat_labels["active"].setText(str(len(active)))
+        self.stat_labels["total"].roll_to(fmt.duration(total, short=True))
+        self.stat_labels["avg"].roll_to(fmt.duration(total / len(active), short=True) if active else "–")
+        self.stat_labels["active"].roll_to(str(len(active)))
         if active:
             best = max(totals.items(), key=lambda kv: kv[1])
-            self.stat_labels["best"].setText(f"{fmt.short_date(best[0])} · {fmt.duration(best[1], short=True)}")
+            self.stat_labels["best"].roll_to(f"{fmt.short_date(best[0])} · {fmt.duration(best[1], short=True)}")
         else:
-            self.stat_labels["best"].setText("–")
+            self.stat_labels["best"].roll_to("–")
         self.header.set_subtitle(
             f"{fmt.duration(total, short=True)} tracked in {first:%B}" if total else f"Nothing tracked in {first:%B}"
         )

@@ -39,6 +39,7 @@ from PySide6.QtWidgets import (
 
 from .. import fonts, icons, motion, theme
 from ..signals import bus
+from .rolling import RollingLabel
 
 PAGE_MARGIN = 28
 MAX_CONTENT_WIDTH = 1280
@@ -460,7 +461,8 @@ class StatTile(QFrame):
         lay.setSpacing(6)
         self.caption = eyebrow(caption)
         lay.addWidget(self.caption)
-        self.value = label("–", "value")
+        self.value = RollingLabel("–")
+        set_role(self.value, "value")
         lay.addWidget(self.value)
         self.sub = label("", "caption")
         lay.addWidget(self.sub)
@@ -483,8 +485,8 @@ class StatTile(QFrame):
         sub_role: str = "caption",
         tooltip: str = "",
     ) -> None:
-        """Show a numeric value. Noticeable changes count toward the new value;
-        the first value counts up from zero when the tile is first shown."""
+        """Show a numeric value. The first value counts up from zero when the tile is first
+        shown, large jumps count toward the new value, and small live changes roll."""
         previous, self._number, self._formatter = self._number, number, formatter
         self.set(self.value.text(), sub, sub_role, tooltip)
         current = motion.running(self, "count")
@@ -498,10 +500,10 @@ class StatTile(QFrame):
                 self.value.setText(formatter(number))
                 self._count_on_show = True
             return
-        if abs(number - previous) > max(abs(previous) * 0.02, 0.5) and self.isVisible():
+        if abs(number - previous) > max(abs(previous) * 0.25, 0.5) and self.isVisible():
             self._count(previous, number)
         else:
-            self.value.setText(formatter(number))
+            self.value.roll_to(formatter(number))
 
     def reset(self) -> None:
         """Forget the shown number so the next value counts up from zero (e.g. a different item)."""

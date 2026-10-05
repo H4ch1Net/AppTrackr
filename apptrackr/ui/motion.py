@@ -14,6 +14,7 @@ Usage guide:
 
 from __future__ import annotations
 
+import math
 import sys
 from typing import Callable
 
@@ -285,6 +286,54 @@ def flash(widget: QWidget, color: str | None = None, radius: float = 12, duratio
 
     overlay = _Flash(widget, QColor(color or theme.current().accent), radius)
     tween(overlay, 1.0, 0.0, duration, overlay.set_strength, DECELERATE, overlay.deleteLater)
+
+
+class _Burst(QWidget):
+    """Ring of short ticks that shoots outward from a point and fades: a dial flash."""
+
+    def __init__(self, host: QWidget, center: QPointF, color: QColor, radius: float, ticks: int):
+        super().__init__(host)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self._center, self._color, self._radius, self._ticks = center, color, radius, ticks
+        self._t = 0.0
+        size = radius * 2 + 24
+        self.setGeometry(int(center.x() - size / 2), int(center.y() - size / 2), int(size), int(size))
+        self.show()
+        self.raise_()
+
+    def set_t(self, value: float) -> None:
+        self._t = value
+        self.update()
+
+    def paintEvent(self, _event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        c = QPointF(self.width() / 2, self.height() / 2)
+        t = self._t
+        color = QColor(self._color)
+        color.setAlphaF(max(0.0, 1.0 - t) ** 1.5)
+        p.setPen(QPen(color, 2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        inner = self._radius * (0.35 + 0.65 * t)
+        length = 7 * (1 - t) + 2
+        for i in range(self._ticks):
+            angle = math.radians(i * 360 / self._ticks - 90 + 8 * t)
+            r2 = inner + length * (1.4 if i % 3 == 0 else 1.0)
+            p.drawLine(
+                QPointF(c.x() + inner * math.cos(angle), c.y() + inner * math.sin(angle)),
+                QPointF(c.x() + r2 * math.cos(angle), c.y() + r2 * math.sin(angle)),
+            )
+
+
+def burst(widget: QWidget, color: str | None = None, radius: float = 34, ticks: int = 12) -> None:
+    """Celebrate a moment (a claim, a level, a build) with ticks bursting from *widget*'s centre."""
+    if not enabled() or widget is None or not widget.isVisible():
+        return
+    from . import theme
+
+    host = widget.window()
+    center = QPointF(widget.mapTo(host, widget.rect().center()))
+    overlay = _Burst(host, center, QColor(color or theme.current().accent), radius, ticks)
+    tween(overlay, 0.0, 1.0, SLOWER + 150, overlay.set_t, DECELERATE, overlay.deleteLater)
 
 
 # ---------------------------------------------------------------------------
