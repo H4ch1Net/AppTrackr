@@ -186,7 +186,7 @@ class AppDetailView(Page):
         stops = list(LIMITS)
         if all(v != limit_minutes for _, v in stops):  # a limit set elsewhere keeps its own stop
             stops = sorted([*stops, (fmt.axis(limit_minutes * MINUTE).lower(), limit_minutes)], key=lambda s: s[1])
-        if stops != self.limit._stops:
+        if stops != self.limit.stops():
             self.limit.set_stops(stops)
         self.limit.set_stop_value(limit_minutes)
 

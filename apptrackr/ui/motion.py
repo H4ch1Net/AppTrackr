@@ -81,16 +81,21 @@ def system_allows_animation() -> bool:
     return True
 
 
+def preference() -> bool:
+    """The user's choice (in-app setting, else the OS), ignoring test overrides."""
+    from ..data import db
+
+    stored = db.get_setting("animations", "")
+    return stored == "1" if stored in ("0", "1") else system_allows_animation()
+
+
 def enabled() -> bool:
     """Whether animations should play: in-app setting, else the OS preference."""
     global _cached
     if _override is not None:
         return _override
     if _cached is None:
-        from ..data import db
-
-        stored = db.get_setting("animations", "")
-        _cached = stored == "1" if stored in ("0", "1") else system_allows_animation()
+        _cached = preference()
     return _cached
 
 

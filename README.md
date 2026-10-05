@@ -33,14 +33,15 @@ time in chosen apps into XP and a small village-building game.
 | Area | What you get |
 | --- | --- |
 | Tracking | Foreground-only time, idle cut-off at your last input, lock-screen detection, midnight-accurate daily totals, UWP apps resolved to the real app, elevated apps tracked by name |
-| Dashboard | Live session card, today vs. this time yesterday, week total, today by hour, last 14 days, top apps with share and category breakdown |
+| Dashboard | Live session dial, today vs. this time yesterday, week total, today by hour, last 14 days, top apps with share and category breakdown |
+| In other terms | Today, this week or all time retold as Everest summit days, Apollo 11 trips, ISS laps, marathons, novels and more, each with the basis for its number |
 | Calendar | Month heatmap with keyboard navigation, month totals and busiest day, per-day hourly chart and app list |
 | Apps | Search, period filter (today to all time), category and favorite filters, sort by time, launches or clicks |
 | App detail | Today / 7 / 30 day totals, 30-day chart, recent sessions, first and last seen, longest session, rename, category |
-| Control | Per-app daily limits with notifications, exclude any app (with undo), pause from the tray for a set time |
+| Control | Per-app daily limits with notifications, per-type notification switches, exclude any app (with undo), pause from the tray for a set time |
 | Rewards | Optional XP, levels, streaks and a village-building game whose buildings boost future rewards |
-| Desktop | Tray icon with live tooltip, launch at sign-in (starts hidden), single instance, dark, light or system theme with 8 accents |
-| Motion | Fluent-timed page transitions, counters, chart and list motion that explain each change; follows Windows *Animation effects* and can be turned off in Settings |
+| Desktop | Tray icon with live tooltip, launch at sign-in (starts hidden), single instance, six palettes (three dark, three light) with system switching and 8 accents |
+| Motion | Fluent-timed page transitions, odometer readouts, springy switches, check marks that draw in, a gliding fader, hover fades and a tick burst on claims and builds; follows Windows *Animation effects* and can be turned off in Settings |
 | Data | CSV and JSON export, consistent database backup and validated restore, automatic schema migrations |
 | Updates | Once-a-day check against GitHub releases, in-app download and install |
 
@@ -60,10 +61,16 @@ time in chosen apps into XP and a small village-building game.
     <td><img src="docs/screenshots/village.png" alt="Village"><br><sub>Village: buildings, inventory and market</sub></td>
   </tr>
   <tr>
-    <td><img src="docs/screenshots/settings.png" alt="Settings"><br><sub>Settings apply immediately</sub></td>
-    <td><img src="docs/screenshots/dashboard-light.png" alt="Dashboard in the light theme"><br><sub>Light theme</sub></td>
+    <td><img src="docs/screenshots/dashboard-perspective.png" alt="In other terms"><br><sub>In other terms: the week as Voyager kilometres, marathons and Everest</sub></td>
+    <td><img src="docs/screenshots/settings-appearance.png" alt="Appearance settings"><br><sub>Palette gallery, accents and animation switch</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/settings.png" alt="Settings"><br><sub>Check boxes and a ruler slider for idle timeout</sub></td>
+    <td><img src="docs/screenshots/dashboard-light.png" alt="Dashboard in the light theme"><br><sub>Paper, the default light palette</sub></td>
   </tr>
 </table>
+
+<img src="docs/screenshots/themes.png" alt="All six palettes, each with a different accent" width="100%">
 
 Screenshots and the animation above are generated from demo data with `python scripts/screenshots.py`
 and `python scripts/record_demo.py`.
@@ -73,13 +80,14 @@ and `python scripts/record_demo.py`.
 The interface is styled as an instrument panel: warm neutrals, hairline rules, engraved monospaced labels
 and one signal color. Recorded history is drawn in neutral ink; the signal color marks only what is live,
 selected or current. Charts use hairline grids, thin bars on tick-mark rulers and a five-step calendar ramp.
-Category colors are a categorical palette checked for color-vision-deficiency separation in both themes,
-and text never takes a data color.
+Category colors are a categorical palette checked for color-vision-deficiency separation in both modes,
+and text never takes a data color. Every palette and accent pair keeps small text at 4.5:1 and marks at
+3:1; accents are re-stepped per palette to hold that (`tests/test_theme.py` checks all 48 pairs).
 
 | Element | Choice |
 | --- | --- |
 | Type | Instrument Sans (interface, tabular figures), Martian Mono (labels) |
-| Themes | Graphite (dark) and Paper (light), or follow Windows |
+| Palettes | Dark: Graphite, Carbon (true black), Midnight. Light: Paper, Porcelain, Sage. System mode switches between your two picks |
 | Signal color | Orange `#ff6b1a` by default, 8 presets in Settings |
 | Shape | 6 px panels, 4 px controls, 1 px borders, no shadows |
 
@@ -108,6 +116,9 @@ use **Quit** from the tray menu (or <kbd>Ctrl</kbd>+<kbd>Q</kbd>) to stop it.
 - **Favorites and streaks.** Star apps you want to spend time in. A streak day needs 30 minutes in favorites.
 - **Rewards.** Pick earning apps on the Rewards page or from an app's page. Milestones (30 min, 1 h, 2 h, 5 h
   of focus per day) pay XP and resources you spend in the village. Turn the whole layer off in Settings.
+- **In other terms.** The dashboard card retells today, this week or all time against known yardsticks.
+  *Shuffle* shows others. Each comparison names its basis, for example "South Col to the summit and back
+  down: about 14 h".
 
 ### Keyboard shortcuts
 
@@ -225,13 +236,14 @@ both to the GitHub release. `ci.yml` runs lint and tests on Windows and Linux fo
 apptrackr/
   __main__.py        entry point: arguments, logging, single instance, service wiring
   paths.py           data, log and asset locations
+  perspective.py     yardsticks for 'In other terms' and how they are picked
   core/              tracker, platform (Win32), launch watcher, click counter, autostart, limits
   data/              SQLite access and migrations, queries, export/backup, app catalog, demo data
   rewards/           milestone rules, reward engine, streaks
   game/              village state and balance values
   updater/           GitHub release check and installer download
   ui/                main window, theme and motion tokens, icons, views and shared widgets
-  assets/            logo, Lucide icons, illustrations, bundled fonts
+  assets/            logo, Lucide and AppTrackr line icons, illustrations, bundled fonts
 packaging/           PyInstaller spec, Inno Setup script, app icon
 scripts/             screenshot, demo animation, README art and icon generators
 tests/               pytest suite (data, tracker, rewards, updater, offscreen UI)
@@ -272,7 +284,8 @@ regenerated screenshots if they change what the README shows.
 
 ## License
 
-[MIT](LICENSE). Icons from [Lucide](https://lucide.dev) (ISC, see `apptrackr/assets/icons/LICENSE`).
+[MIT](LICENSE). Icons from [Lucide](https://lucide.dev) (ISC, see `apptrackr/assets/icons/LICENSE`), plus a few
+drawn for AppTrackr (marked in the SVG).
 Fonts: [Instrument Sans](https://github.com/Instrument/instrument-sans) and
 [Martian Mono](https://github.com/evilmartians/mono), both SIL Open Font License 1.1
 (see `apptrackr/assets/fonts`).

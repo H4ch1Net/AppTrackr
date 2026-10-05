@@ -186,6 +186,9 @@ class TickSlider(QAbstractSlider):
         self.updateGeometry()
         self.update()
 
+    def stops(self) -> list[tuple[str, object]]:
+        return list(self._stops)
+
     def stop_value(self):
         return self._stops[self.value()][1] if self._stops else None
 

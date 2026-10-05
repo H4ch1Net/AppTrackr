@@ -102,6 +102,70 @@ def main() -> int:
     window.open_app(queries.find_app_id("code.exe"))
     shot("app-detail")
 
+    def scroll_to(view, widget, offset: int = 24) -> None:
+        y = widget.mapTo(view.widget(), widget.rect().topLeft()).y()
+        view.verticalScrollBar().setValue(max(0, y - offset))
+
+    dashboard = window._views["dashboard"]
+    window.show_page("dashboard")
+    scroll_to(dashboard, dashboard.other_terms, 380)
+    shot("dashboard-perspective")
+    dashboard.verticalScrollBar().setValue(0)
+
+    settings = window._views["settings"]
+    window.show_page("settings")
+    scroll_to(settings, settings.mode.parentWidget().parentWidget(), 24)
+    shot("settings-appearance")
+    settings.verticalScrollBar().setValue(0)
+
+    # Every palette, each with a different accent, as one montage.
+    from PySide6.QtCore import QRectF, Qt
+    from PySide6.QtGui import QColor, QImage, QPainter
+
+    from apptrackr.ui import fonts, theme
+
+    pairs = (
+        ("Graphite", "Orange"),
+        ("Carbon", "Cyan"),
+        ("Midnight", "Blue"),
+        ("Paper", "Orange"),
+        ("Porcelain", "Purple"),
+        ("Sage", "Green"),
+    )
+    tw, th, gap, cap = 640, 400, 24, 34
+    montage = QImage(3 * tw + 4 * gap, 2 * (th + cap) + 3 * gap, QImage.Format.Format_RGB32)
+    montage.fill(QColor(theme.build("Graphite").window))
+    painter = QPainter(montage)
+    painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+    window.show_page("dashboard")
+    for i, (palette, accent) in enumerate(pairs):
+        kind = "dark" if palette in theme.DARK_PALETTES else "light"
+        db.set_setting("ui_mode", kind)
+        db.set_setting(f"ui_{kind}_palette", palette)
+        db.set_setting("ui_theme", accent)
+        window.apply_theme()
+        window._tick()
+        settle()
+        window.toast.hide()
+        image = (
+            window.grab()
+            .toImage()
+            .scaled(tw, th, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        )
+        x, y = gap + (i % 3) * (tw + gap), gap + (i // 3) * (th + cap + gap)
+        painter.drawImage(x, y, image)
+        painter.setPen(QColor("#edebe4"))
+        painter.setFont(fonts.mono(12, 500, 10))
+        painter.drawText(
+            QRectF(x, y + th + 8, tw, 20), Qt.AlignmentFlag.AlignLeft, f"{palette.upper()}  ·  {accent.upper()}"
+        )
+    painter.end()
+    montage.save(str(out / "themes.png"))
+    print(f"wrote {out / 'themes.png'}")
+
+    db.set_setting("ui_dark_palette", theme.DEFAULT_DARK)
+    db.set_setting("ui_light_palette", theme.DEFAULT_LIGHT)
+    db.set_setting("ui_theme", theme.DEFAULT_ACCENT)
     db.set_setting("ui_mode", "light")
     window.apply_theme()
     window.show_page("dashboard")

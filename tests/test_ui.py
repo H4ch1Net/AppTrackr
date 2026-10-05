@@ -127,3 +127,91 @@ def test_formatters():
     assert fmt.reward({"wood": 5, "xp": 10}) == "+10 XP  +5 wood"
     assert fmt.percent_change(150, 100) == "+50%"
     assert fmt.percent_change(1, 0) is None
+
+
+def test_tick_slider_commits_final_values(qapp):
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    from apptrackr.ui.widgets.controls import TickSlider
+
+    slider = TickSlider([("Off", 0), ("15m", 15), ("30m", 30)])
+    slider.resize(300, 44)
+    slider.show()
+    got = []
+    slider.committed.connect(got.append)
+    slider.set_stop_value(15)
+    assert slider.stop_value() == 15 and got == []  # programmatic selection is silent
+    slider.setFocus()
+    QTest.keyClick(slider, Qt.Key.Key_Right)
+    assert got == [30]
+    slider.setSliderDown(True)
+    slider.setValue(0)
+    assert got == [30]  # nothing while dragging
+    slider.setSliderDown(False)
+    assert got == [30, 0]
+    slider.set_stops([("Off", 0), ("20m", 20), ("30m", 30)])
+    assert slider.index_of(20) == 1
+
+
+def test_notification_kinds(window, qapp):
+    settings = window._views["settings"]
+    window.show_page("settings")
+    qapp.processEvents()
+    box = settings.notify_boxes["streaks"]
+    assert box.isChecked()
+    box.click()
+    assert db.get_bool("notify_streaks", True) is False
+    settings.notifications.click()  # master switch off disables the kinds
+    assert not box.isEnabled()
+    settings.notifications.click()
+    assert box.isEnabled()
+
+    class FakeTray:
+        def __init__(self):
+            self.shown = []
+
+        def showMessage(self, title, *_args):  # noqa: N802 - Qt naming
+            self.shown.append(title)
+
+        def __getattr__(self, _name):
+            return lambda *a, **k: None
+
+    tray = FakeTray()
+    window._tray = tray
+    window.hide()
+    window.notify("Streak", "x", kind="streaks")
+    window.notify("Daily limit reached", "y", kind="limits")
+    window._tray = None
+    assert tray.shown == ["Daily limit reached"]
+
+
+def test_palette_tiles_switch_theme(window, qapp):
+    from apptrackr.ui import theme
+
+    settings = window._views["settings"]
+    window.show_page("settings")
+    qapp.processEvents()
+    settings.tiles["Midnight"].click()
+    assert theme.current().name == "Midnight" and db.get_setting("ui_dark_palette") == "Midnight"
+    settings.tiles["Sage"].click()
+    assert theme.current().name == "Sage" and db.get_setting("ui_mode") == "light"
+    assert settings.tiles["Midnight"].isChecked() and settings.tiles["Sage"].isChecked()
+    assert settings.tiles["Sage"].active and not settings.tiles["Midnight"].active
+
+
+def test_other_terms_card(window, qapp):
+    dash = window._views["dashboard"]
+    window.show_page("dashboard")
+    window._tick()
+    qapp.processEvents()
+    card = dash.other_terms
+    shown = [t for t in card.tiles if t.key]
+    assert shown, "comparisons should render for demo data"
+    keys = [t.key for t in card.tiles]
+    card._shuffle()
+    qapp.processEvents()
+    assert [t.key for t in card.tiles] != keys or not card.shuffle.isEnabled()
+    card.period._group.button(2).click()
+    qapp.processEvents()
+    assert card.current_period == "all" and db.get_setting("perspective_period") == "all"

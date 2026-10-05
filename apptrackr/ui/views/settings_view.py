@@ -495,7 +495,7 @@ class SettingsView(Page):
             box.set_silently(db.get_bool(f"notify_{key}", True))
             box.setEnabled(self.notifications.isChecked())
 
-        self.animations.set_silently(motion.enabled())
+        self.animations.set_silently(motion.preference())
         self.mode.set_current(theme.MODES.index(theme.mode()))
         self.swatches[theme.accent_name()].setChecked(True)
         self._sync_tiles()

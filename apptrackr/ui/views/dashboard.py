@@ -194,6 +194,7 @@ class DashboardView(Page):
         self._yesterday_hours: list[int] | None = None
         self._day_keys: list[str] = []
         self._fractions: dict[int, float] = {}
+        self._before_today: tuple[str, int] = ("", 0)
 
         self.header = PageHeader("Dashboard", "", kicker=_kicker_date())
         self.add(self.header)
@@ -290,8 +291,11 @@ class DashboardView(Page):
         week_ms = queries.total_ms(queries.week_start(), today) + live
         days_in = date.today().weekday() + 1
         self.t_week.set_number(week_ms, _short, f"{fmt.duration(week_ms / days_in, short=True)} per day on average")
-        all_ms = queries.total_ms(queries.first_tracked_day() or today, today) + live
-        self.other_terms.set_totals(today_ms, week_ms, all_ms)
+        if self._before_today[0] != today:  # everything before today changes once a day
+            first = queries.first_tracked_day() or today
+            yesterday = (date.today() - timedelta(days=1)).isoformat()
+            self._before_today = (today, queries.total_ms(first, yesterday) if first < today else 0)
+        self.other_terms.set_totals(today_ms, week_ms, self._before_today[1] + today_ms)
 
         profile = rewards.get_profile()
         streak = profile["streak"]
