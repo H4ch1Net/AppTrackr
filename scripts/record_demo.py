@@ -29,7 +29,8 @@ def main() -> int:
     parser.add_argument("--width", type=int, default=1280)
     parser.add_argument("--height", type=int, default=800)
     parser.add_argument("--scale", type=float, default=0.6, help="GIF scale factor")
-    parser.add_argument("--fps", type=int, default=25, help="playback frame rate")
+    parser.add_argument("--fps", type=int, default=20, help="playback frame rate")
+    parser.add_argument("--colors", type=int, default=112, help="GIF palette size")
     parser.add_argument(
         "--slowdown", type=float, default=4.0, help="run animations this many times slower while capturing"
     )
@@ -112,8 +113,22 @@ def main() -> int:
     timer.start(interval)
 
     # Tour ------------------------------------------------------------------
+    def scroll(view, target: int, ms: int = 500) -> None:
+        bar = view.verticalScrollBar()
+        motion.tween(view, float(bar.value()), float(target), ms, lambda v: bar.setValue(int(v)), motion.EASY_EASE)
+
+    def scroll_to(view, widget, offset: int = 24) -> None:
+        y = widget.mapTo(view.widget(), widget.rect().topLeft()).y()
+        scroll(view, max(0, y - offset))
+
     window.show_page("dashboard")
     wait(1700)
+    dashboard = window._views["dashboard"]
+    scroll(dashboard, dashboard.verticalScrollBar().maximum())
+    wait(900)
+    dashboard.other_terms._shuffle()
+    wait(1300)
+    dashboard.verticalScrollBar().setValue(0)
     window.show_page("calendar")
     wait(900)
     cal = window._views["calendar"]
@@ -129,16 +144,29 @@ def main() -> int:
     wait(800)
     window._views["apps"].sort._group.button(2).click()
     wait(1000)
-    window.open_app(queries.find_app_id("code.exe"))
-    wait(1200)
+    window.open_app(queries.find_app_id("discord.exe"))
+    wait(900)
+    detail = window._views["app"]
+    scroll_to(detail, detail.limit, 260)
+    wait(700)
+    detail.limit.setValue(detail.limit.index_of(60))  # the fader glides to the new stop
+    wait(1100)
     window.show_page("rewards")
     wait(700)
     window._views["rewards"]._claim_all()
-    wait(1500)
-    window.show_page("dashboard")
+    wait(1600)
+    settings = window._views["settings"]
+    window.show_page("settings")
+    wait(400)
+    scroll_to(settings, settings.tiles["Graphite"], 150)
+    wait(800)
+    settings.tiles["Midnight"].click()
+    wait(1200)
+    settings.tiles["Sage"].click()
+    wait(1300)
+    settings.tiles["Paper"].click()
     wait(700)
-    db.set_setting("ui_mode", "light")
-    window.apply_theme()
+    window.show_page("dashboard")
     wait(1300)
 
     timer.stop()
@@ -161,7 +189,9 @@ def main() -> int:
             kept[-1] = (kept[-1][0], kept[-1][1] + duration)
         else:
             kept.append((image, duration))
-    images = [img.quantize(colors=128, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE) for img, _ in kept]
+    images = [
+        img.quantize(colors=args.colors, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE) for img, _ in kept
+    ]
     durations = [max(20, d) for _, d in kept]
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)

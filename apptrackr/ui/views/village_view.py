@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QProgressBar, QVBoxLayout, QWidget
 
@@ -217,7 +217,13 @@ class VillageView(Page):
         self._place_buildings()
         self._levels = {name: game_state.building_level(village, name) for name in game_state.BUILDINGS}
         if self._just_built in self._cards:
-            motion.flash(self._cards[self._just_built])
+            card = self._cards[self._just_built]
+
+            def celebrate() -> None:  # after layout, so the card has its final geometry
+                motion.flash(card)
+                motion.burst(card.findChild(BlueprintTile), radius=30)
+
+            QTimer.singleShot(0, card, celebrate)
         self._just_built = None
 
     def resizeEvent(self, event):

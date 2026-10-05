@@ -1,8 +1,10 @@
 """Design tokens and the global stylesheet: the "Instrument panel" system.
 
-Graphite (dark) and Paper (light) are warm neutrals with hairline structure and
-one signal accent. Data marks are drawn in neutral ink; the accent marks what is
-live or selected. Fonts come from ui/fonts.py.
+Six palettes (three dark, three light) share one structure: neutral surfaces,
+hairline borders and a single signal accent. Data marks are drawn in neutral
+ink; the accent marks what is live or selected. Every palette keeps small text
+at 4.5:1 or better, and accents are re-stepped per palette so marks read at 3:1
+and accent text at 4.5:1. Fonts come from ui/fonts.py.
 """
 
 from __future__ import annotations
@@ -11,8 +13,8 @@ from dataclasses import dataclass, replace
 
 from PySide6.QtGui import QColor, QPalette
 
-# Signal accents. Values are tuned for the Graphite surface; Paper uses a darker
-# step for text (Theme.accent_text) while fills keep the same hue.
+# Signal accents, tuned for dark surfaces. Light palettes darken them (fit_accent)
+# so fills and text keep their contrast.
 ACCENTS = {
     "Orange": "#ff6b1a",
     "Amber": "#f2b01e",
@@ -52,6 +54,18 @@ def contrast(a: str, b: str) -> float:
     return (la + 0.05) / (lb + 0.05)
 
 
+def _step_until(color: str, against: tuple[str, ...], target: float, dark: bool) -> str:
+    """Lighten (dark themes) or darken (light themes) *color* in HSV until it meets *target*."""
+    c = QColor(color)
+    for _ in range(40):
+        if all(contrast(c.name(), bg) >= target for bg in against):
+            break
+        c = c.lighter(104) if dark else c.darker(104)
+        if dark and c.value() >= 255:  # saturated colours stop lightening in HSV; blend toward white
+            c = QColor(_mix(c.name(), "#ffffff", 0.08))
+    return c.name()
+
+
 @dataclass(frozen=True)
 class Theme:
     dark: bool
@@ -74,6 +88,7 @@ class Theme:
     danger: str = "#f04e4e"
     warning: str = "#f2a516"
     success: str = "#47c46b"
+    name: str = ""
 
     def accent_soft(self, alpha: float = 0.16) -> str:
         c = QColor(self.accent)
@@ -86,13 +101,8 @@ class Theme:
 
     @property
     def accent_text(self) -> str:
-        """Accent usable as text on the window; darkened on Paper until it reads at 4.5:1."""
-        color = self.accent
-        step = 0
-        while contrast(color, self.window) < 4.5 and step < 12:
-            color = _mix(color, self.text, 0.08)
-            step += 1
-        return color
+        """Accent usable as small text on the window and on panels (4.5:1)."""
+        return _step_until(self.accent, (self.window, self.surface), 4.5, self.dark)
 
     @property
     def on_accent(self) -> str:
@@ -112,6 +122,7 @@ class Theme:
 
 
 GRAPHITE = Theme(
+    name="Graphite",
     dark=True,
     window="#121210",
     sidebar="#0e0e0c",
@@ -123,13 +134,54 @@ GRAPHITE = Theme(
     border_strong="#3b3a35",
     text="#edebe4",
     text_dim="#aaa79d",
-    text_muted="#77746b",
+    text_muted="#8b8880",
     track="#25241f",
     ink="#6b6860",
     grid="#23221f",
 )
 
+CARBON = Theme(
+    name="Carbon",
+    dark=True,
+    window="#000000",
+    sidebar="#050505",
+    surface="#0c0c0c",
+    surface_alt="#141414",
+    hover="#1b1b1b",
+    input="#080808",
+    border="#242424",
+    border_strong="#353535",
+    text="#f3f3f1",
+    text_dim="#a9a9a6",
+    text_muted="#80807d",
+    track="#1a1a1a",
+    ink="#5e5e5c",
+    grid="#151515",
+)
+
+MIDNIGHT = Theme(
+    name="Midnight",
+    dark=True,
+    window="#0b0f17",
+    sidebar="#080b11",
+    surface="#111723",
+    surface_alt="#18202e",
+    hover="#1f2938",
+    input="#0d121c",
+    border="#232d3d",
+    border_strong="#334055",
+    text="#e7ecf3",
+    text_dim="#a0abbd",
+    text_muted="#7d89a1",
+    track="#1a2231",
+    ink="#58657b",
+    grid="#171f2c",
+)
+
+_LIGHT_STATUS = {"gold": "#b9800a", "danger": "#d23b30", "warning": "#b86e00", "success": "#2a8a47"}
+
 PAPER = Theme(
+    name="Paper",
     dark=False,
     window="#f2f0ea",
     sidebar="#ebe8e0",
@@ -141,15 +193,69 @@ PAPER = Theme(
     border_strong="#c8c2b5",
     text="#191814",
     text_dim="#4f4c44",
-    text_muted="#7f7b71",
+    text_muted="#6b675e",
     track="#e7e3d9",
-    ink="#aca595",
+    ink="#969082",
     grid="#e0dcd2",
-    gold="#b9800a",
-    danger="#d23b30",
-    warning="#b86e00",
-    success="#2a8a47",
+    **_LIGHT_STATUS,
 )
+
+PORCELAIN = Theme(
+    name="Porcelain",
+    dark=False,
+    window="#f0f2f4",
+    sidebar="#e8ebee",
+    surface="#fbfcfd",
+    surface_alt="#eff1f4",
+    hover="#e5e8ec",
+    input="#ffffff",
+    border="#d8dce2",
+    border_strong="#c2c8d0",
+    text="#14171c",
+    text_dim="#48505c",
+    text_muted="#626976",
+    track="#e3e6eb",
+    ink="#8c939e",
+    grid="#dde1e6",
+    **_LIGHT_STATUS,
+)
+
+SAGE = Theme(
+    name="Sage",
+    dark=False,
+    window="#edf0ea",
+    sidebar="#e4e8e0",
+    surface="#f8faf6",
+    surface_alt="#ecefe8",
+    hover="#e1e6dc",
+    input="#fbfcfa",
+    border="#d3d9cd",
+    border_strong="#bbc4b4",
+    text="#151a13",
+    text_dim="#465041",
+    text_muted="#5f695a",
+    track="#dfe4da",
+    ink="#899282",
+    grid="#d9dfd3",
+    **_LIGHT_STATUS,
+)
+
+DARK_PALETTES = {t.name: t for t in (GRAPHITE, CARBON, MIDNIGHT)}
+LIGHT_PALETTES = {t.name: t for t in (PAPER, PORCELAIN, SAGE)}
+PALETTES = {**DARK_PALETTES, **LIGHT_PALETTES}
+DEFAULT_DARK, DEFAULT_LIGHT = GRAPHITE.name, PAPER.name
+
+
+def fit_accent(color: str, base: Theme) -> str:
+    """The accent as used on *base*: stepped until marks read at 3:1 against its panels."""
+    return _step_until(color, (base.surface, base.window), 3.0, base.dark)
+
+
+def build(palette_name: str, accent_name: str = DEFAULT_ACCENT) -> Theme:
+    """A complete theme: palette plus fitted accent."""
+    base = PALETTES.get(palette_name, GRAPHITE)
+    return replace(base, accent=fit_accent(ACCENTS.get(accent_name, ACCENTS[DEFAULT_ACCENT]), base))
+
 
 # Category colours: a validated categorical set (dataviz reference palette), stepped
 # per mode. Text never wears these; they mark swatches, dots and share segments.
@@ -166,9 +272,10 @@ CATEGORY_COLORS = {
     None: ("#a39e92", "#5e5b54"),
 }
 
-_current = GRAPHITE
+_current = build(DEFAULT_DARK)
 _mode = "dark"
 _accent_name = DEFAULT_ACCENT
+_palettes = {"dark": DEFAULT_DARK, "light": DEFAULT_LIGHT}
 
 
 def current() -> Theme:
@@ -183,20 +290,35 @@ def accent_name() -> str:
     return _accent_name
 
 
+def palette_choice(kind: str) -> str:
+    """The palette chosen for 'dark' or 'light' mode."""
+    return _palettes[kind]
+
+
 def category_color(category: str | None) -> str:
     light, dark = CATEGORY_COLORS.get(category, CATEGORY_COLORS[None])
     return dark if _current.dark else light
 
 
-def configure(mode: str | None = None, accent: str | None = None, system_dark: bool = True) -> Theme:
-    """Select mode ('dark', 'light', 'system') and accent preset; returns the new theme."""
+def configure(
+    mode: str | None = None,
+    accent: str | None = None,
+    system_dark: bool = True,
+    dark_palette: str | None = None,
+    light_palette: str | None = None,
+) -> Theme:
+    """Select mode ('dark', 'light', 'system'), accent and per-mode palettes; returns the new theme."""
     global _current, _mode, _accent_name
     if mode in MODES:
         _mode = mode
     if accent in ACCENTS:
         _accent_name = accent
+    if dark_palette in DARK_PALETTES:
+        _palettes["dark"] = dark_palette
+    if light_palette in LIGHT_PALETTES:
+        _palettes["light"] = light_palette
     dark = system_dark if _mode == "system" else _mode == "dark"
-    _current = replace(GRAPHITE if dark else PAPER, accent=ACCENTS[_accent_name])
+    _current = build(_palettes["dark" if dark else "light"], _accent_name)
     return _current
 
 

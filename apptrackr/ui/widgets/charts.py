@@ -12,6 +12,7 @@ from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QSizePolicy, QToolTip, QWidget
 
 from .. import fmt, fonts, motion, theme
+from .rolling import paint_roll
 
 
 def _font(widget: QWidget, px: int, bold: bool = False) -> QFont:
@@ -56,6 +57,42 @@ def _column(x: float, baseline: float, width: float, height: float, radius: floa
     return path
 
 
+class _Fades:
+    """Per-key hover amounts (0..1) that ease in quickly and out gently."""
+
+    def __init__(self, owner: QWidget):
+        self.owner = owner
+        self.values: dict = {}
+
+    def focus(self, key) -> None:
+        for k, v in list(self.values.items()):
+            if k != key and v > 0:
+                self._ease(k, 0.0, motion.NORMAL)
+        if key is not None:
+            self._ease(key, 1.0, motion.FASTER)
+
+    def get(self, key) -> float:
+        return self.values.get(key, 0.0)
+
+    def _ease(self, key, target: float, duration: int) -> None:
+        motion.tween(
+            self.owner,
+            self.get(key),
+            target,
+            duration,
+            lambda v: self._set(key, v),
+            motion.DECELERATE,
+            key=f"hover_{key}",
+        )
+
+    def _set(self, key, value: float) -> None:
+        if value <= 0.001:
+            self.values.pop(key, None)
+        else:
+            self.values[key] = value
+        self.owner.update()
+
+
 @dataclass
 class Bar:
     label: str  # axis label ('' to hide)
@@ -73,6 +110,7 @@ class BarChart(QWidget):
         self._bars: list[Bar] = []
         self._highlight: int | None = None
         self._hover: int | None = None
+        self._fades = _Fades(self)
         self._limit: float | None = None
         self._empty_text = "No activity yet"
         # Animation state: bars ease from _from to _to; _progress runs 0..1 over the series.
@@ -163,7 +201,7 @@ class BarChart(QWidget):
         idx = self._index_at(event.position().x())
         if idx != self._hover:
             self._hover = idx
-            self.update()
+            self._fades.focus(idx)
         if idx is not None and self._bars[idx].tooltip:
             QToolTip.showText(event.globalPosition().toPoint(), self._bars[idx].tooltip, self)
         else:
@@ -171,7 +209,7 @@ class BarChart(QWidget):
 
     def leaveEvent(self, _event):
         self._hover = None
-        self.update()
+        self._fades.focus(None)
 
     def mouseReleaseEvent(self, event):
         idx = self._index_at(event.position().x())
@@ -215,6 +253,13 @@ class BarChart(QWidget):
             p.setPen(QPen(QColor(t.text_muted if major else t.border_strong), 1))
             p.drawLine(QPointF(cx, base + 2), QPointF(cx, base + (7 if major else 4)))
 
+        # Hover cursor: a faint column behind the bar under the pointer.
+        for i, amount in self._fades.values.items():
+            if isinstance(i, int) and i < len(self._bars):
+                band = QColor(t.text)
+                band.setAlphaF((0.05 if t.dark else 0.06) * amount)
+                p.fillRect(QRectF(plot.left() + slot * i, plot.top(), slot, plot.height()), band)
+
         ink = QColor(t.ink)
         for i, bar in enumerate(self._bars):
             x = plot.left() + slot * i + (slot - bar_w) / 2
@@ -223,8 +268,10 @@ class BarChart(QWidget):
             color = QColor(t.accent) if highlighted or self._highlight is None else QColor(ink)
             if self._limit and bar.value > self._limit:
                 color = QColor(t.danger)
-            if i == self._hover:
-                color = QColor(t.text_dim) if color == ink else color.lighter(115) if t.dark else color.darker(110)
+            amount = self._fades.get(i)
+            if amount:
+                lit = QColor(t.text_dim) if color == ink else color.lighter(115) if t.dark else color.darker(110)
+                color = QColor(theme._mix(color.name(), lit.name(), amount))
             if h > 0.5:
                 p.setPen(Qt.PenStyle.NoPen)
                 p.setBrush(color)
@@ -268,6 +315,7 @@ class MonthHeatmap(QWidget):
         self._totals: dict[str, int] = {}
         self._selected: date | None = date.today()
         self._hover: date | None = None
+        self._fades = _Fades(self)
         self._wave = 1.0  # 0..1 entrance progress after a month change
         self._ring: QRectF | None = None  # animated selection ring while gliding
         self.setMouseTracking(True)
@@ -368,7 +416,7 @@ class MonthHeatmap(QWidget):
         d = self._day_at(event.position())
         if d != self._hover:
             self._hover = d
-            self.update()
+            self._fades.focus(d)
         if d:
             ms = self._totals.get(d.isoformat(), 0)
             tip = f"{fmt.long_date(d)}\n{fmt.duration(ms) if ms else 'No activity'}"
@@ -376,7 +424,7 @@ class MonthHeatmap(QWidget):
 
     def leaveEvent(self, _event):
         self._hover = None
-        self.update()
+        self._fades.focus(None)
 
     def mouseReleaseEvent(self, event):
         d = self._day_at(event.position())
@@ -449,8 +497,11 @@ class MonthHeatmap(QWidget):
                 p.setBrush(QColor(t.heat(max(level, 1) if d == today and ms else level, today=d == today)))
                 p.drawRoundedRect(r, radius, radius)
 
-            if d == self._hover and not future:
-                p.setPen(QPen(QColor(t.text_dim), 1))
+            hover = self._fades.get(d)
+            if hover and not future:
+                edge = QColor(t.text_dim)
+                edge.setAlphaF(hover)
+                p.setPen(QPen(edge, 1))
                 p.setBrush(Qt.BrushStyle.NoBrush)
                 p.drawRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), radius, radius)
             if d == today:
@@ -627,6 +678,9 @@ class SessionDial(QWidget):
         self._caption = ""
         self._hand = 0.0  # degrees, eased between seconds
         self._last_second = -1
+        self._text = "–:––"
+        self._old_text = ""
+        self._roll = 1.0  # readout digits roll like a mechanical counter
         self.setAccessibleName("Session timer")
 
     def set_state(self, active: bool, session_ms: int, caption: str) -> None:
@@ -639,7 +693,19 @@ class SessionDial(QWidget):
             self._last_second = second
         elif not active:
             self._last_second = -1
+        text = fmt.clock(session_ms) if active else "–:––"
+        if text != self._text:
+            if active and self._text != "–:––" and self.isVisible() and motion.enabled():
+                self._old_text = self._text
+                motion.tween(self, 0.0, 1.0, motion.GENTLE, self._set_roll, motion.LINEAR, key="roll")
+            else:
+                self._roll = 1.0
+            self._text = text
         self.setToolTip(fmt.clock(session_ms) if active else caption)
+        self.update()
+
+    def _set_roll(self, value: float) -> None:
+        self._roll = value
         self.update()
 
     def _set_hand(self, value: float) -> None:
@@ -686,10 +752,15 @@ class SessionDial(QWidget):
             )
 
         # Readout.
-        p.setPen(QColor(t.text if self._active else t.text_muted))
-        p.setFont(fonts.sans(26 if self._ms < 3_600_000 else 22, 600, tabular=True))
-        text = fmt.clock(self._ms) if self._active else "–:––"
-        p.drawText(QRectF(0, c.y() - 22, self.width(), 30), Qt.AlignmentFlag.AlignCenter, text)
+        color = QColor(t.text if self._active else t.text_muted)
+        font = fonts.sans(26 if self._ms < 3_600_000 else 22, 600, tabular=True)
+        readout = QRectF(0, c.y() - 22, self.width(), 30)
+        if self._roll < 1.0 and len(self._old_text) == len(self._text):
+            paint_roll(p, readout, Qt.AlignmentFlag.AlignHCenter, self._old_text, self._text, self._roll, font, color)
+        else:
+            p.setPen(color)
+            p.setFont(font)
+            p.drawText(readout, Qt.AlignmentFlag.AlignCenter, self._text)
         p.setFont(fonts.mono(8, 500, 12))
         p.setPen(QColor(t.text_muted))
         p.drawText(QRectF(0, c.y() + 10, self.width(), 14), Qt.AlignmentFlag.AlignCenter, self._caption.upper())

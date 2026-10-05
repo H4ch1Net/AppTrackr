@@ -9,10 +9,12 @@ Usage guide:
 - exit / dismiss      ACCELERATE, FASTER-FAST
 - move / resize       EASY_EASE, NORMAL-GENTLE
 - data change         EASY_EASE, SLOW (staggered for series)
+- physical controls   SPRING, GENTLE (toggle knob)
 """
 
 from __future__ import annotations
 
+import math
 import sys
 from typing import Callable
 
@@ -48,6 +50,8 @@ def _bezier(x1: float, y1: float, x2: float, y2: float) -> QEasingCurve:
 DECELERATE = _bezier(0.1, 0.9, 0.2, 1.0)
 ACCELERATE = _bezier(0.9, 0.1, 1.0, 0.2)
 EASY_EASE = _bezier(0.33, 0.0, 0.67, 1.0)
+# Small overshoot for physical controls (switch knobs, check marks settling).
+SPRING = _bezier(0.34, 1.4, 0.64, 1.0)
 LINEAR = QEasingCurve(QEasingCurve.Type.Linear)
 
 _override: bool | None = None
@@ -77,16 +81,21 @@ def system_allows_animation() -> bool:
     return True
 
 
+def preference() -> bool:
+    """The user's choice (in-app setting, else the OS), ignoring test overrides."""
+    from ..data import db
+
+    stored = db.get_setting("animations", "")
+    return stored == "1" if stored in ("0", "1") else system_allows_animation()
+
+
 def enabled() -> bool:
     """Whether animations should play: in-app setting, else the OS preference."""
     global _cached
     if _override is not None:
         return _override
     if _cached is None:
-        from ..data import db
-
-        stored = db.get_setting("animations", "")
-        _cached = stored == "1" if stored in ("0", "1") else system_allows_animation()
+        _cached = preference()
     return _cached
 
 
@@ -216,14 +225,26 @@ def stagger_in(widgets: list[QWidget], step: int = 22, duration: int = FAST, lim
 
 
 def collapse(widget: QWidget, on_done: Callable, duration: int = NORMAL) -> None:
-    """Fade a widget out while shrinking its height to zero, then call *on_done*."""
+    """Fade a widget out while shrinking its height to zero, then call *on_done*.
+
+    *on_done* runs exactly once, also when a refresh destroys the widget mid-animation.
+    """
     if not enabled():
         on_done()
         return
+    done = False
+
+    def finish(*_args) -> None:
+        nonlocal done
+        if not done:
+            done = True
+            on_done()
+
+    widget.destroyed.connect(finish)
     widget.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
     height = widget.height()
     fade(widget, 1.0, 0.0, FAST, ACCELERATE)
-    tween(widget, height, 0, duration, lambda v: _set_max_height(widget, v), EASY_EASE, on_done, key="collapse")
+    tween(widget, height, 0, duration, lambda v: _set_max_height(widget, v), EASY_EASE, finish, key="collapse")
 
 
 def _set_max_height(widget: QWidget, value: float) -> None:
@@ -270,6 +291,54 @@ def flash(widget: QWidget, color: str | None = None, radius: float = 12, duratio
 
     overlay = _Flash(widget, QColor(color or theme.current().accent), radius)
     tween(overlay, 1.0, 0.0, duration, overlay.set_strength, DECELERATE, overlay.deleteLater)
+
+
+class _Burst(QWidget):
+    """Ring of short ticks that shoots outward from a point and fades: a dial flash."""
+
+    def __init__(self, host: QWidget, center: QPointF, color: QColor, radius: float, ticks: int):
+        super().__init__(host)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self._center, self._color, self._radius, self._ticks = center, color, radius, ticks
+        self._t = 0.0
+        size = radius * 2 + 24
+        self.setGeometry(int(center.x() - size / 2), int(center.y() - size / 2), int(size), int(size))
+        self.show()
+        self.raise_()
+
+    def set_t(self, value: float) -> None:
+        self._t = value
+        self.update()
+
+    def paintEvent(self, _event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        c = QPointF(self.width() / 2, self.height() / 2)
+        t = self._t
+        color = QColor(self._color)
+        color.setAlphaF(max(0.0, 1.0 - t) ** 1.5)
+        p.setPen(QPen(color, 2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        inner = self._radius * (0.35 + 0.65 * t)
+        length = 7 * (1 - t) + 2
+        for i in range(self._ticks):
+            angle = math.radians(i * 360 / self._ticks - 90 + 8 * t)
+            r2 = inner + length * (1.4 if i % 3 == 0 else 1.0)
+            p.drawLine(
+                QPointF(c.x() + inner * math.cos(angle), c.y() + inner * math.sin(angle)),
+                QPointF(c.x() + r2 * math.cos(angle), c.y() + r2 * math.sin(angle)),
+            )
+
+
+def burst(widget: QWidget, color: str | None = None, radius: float = 34, ticks: int = 12) -> None:
+    """Celebrate a moment (a claim, a level, a build) with ticks bursting from *widget*'s centre."""
+    if not enabled() or widget is None or not widget.isVisible():
+        return
+    from . import theme
+
+    host = widget.window()
+    center = QPointF(widget.mapTo(host, widget.rect().center()))
+    overlay = _Burst(host, center, QColor(color or theme.current().accent), radius, ticks)
+    tween(overlay, 0.0, 1.0, SLOWER + 150, overlay.set_t, DECELERATE, overlay.deleteLater)
 
 
 # ---------------------------------------------------------------------------

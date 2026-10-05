@@ -93,6 +93,11 @@ class Tracker:
         with self._lock:
             self._close(self._clock())
 
+    def flush(self) -> None:
+        """Commit the live session so far without ending it (sign-out, installer closing the app)."""
+        with self._lock:
+            self._checkpoint(self._clock())
+
     def reload_settings(self) -> None:
         with self._lock:
             self._idle_threshold = max(0, db.get_int("idle_threshold_sec", 300))

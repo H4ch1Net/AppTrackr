@@ -34,6 +34,8 @@ from ..widgets.components import (
     set_role,
     tone_color,
 )
+from ..widgets.other_terms import OtherTermsCard
+from ..widgets.rolling import RollingLabel
 
 TOP_APPS = 7
 
@@ -112,7 +114,7 @@ class NowCard(Card):
         box = QVBoxLayout()
         box.setSpacing(2)
         box.addWidget(eyebrow(caption))
-        value = label("–")
+        value = RollingLabel("–")
         value.setFont(fonts.sans(14, 600, tabular=True))
         box.addWidget(value)
         return box, value
@@ -145,7 +147,7 @@ class NowCard(Card):
                 parts.append(f"limit {fmt.duration(app['daily_limit_ms'], short=True)}")
             self.detail.setText(" · ".join(parts))
             self.fact_started[1].setText(fmt.time_of_day(snap.session_start))
-            self.fact_today[1].setText(fmt.duration(today, short=True))
+            self.fact_today[1].roll_to(fmt.duration(today, short=True))
             self.dial.set_state(True, snap.session_ms, "Session")
             self._set_state("Live", "pillAccent")
             return
@@ -192,6 +194,7 @@ class DashboardView(Page):
         self._yesterday_hours: list[int] | None = None
         self._day_keys: list[str] = []
         self._fractions: dict[int, float] = {}
+        self._before_today: tuple[str, int] = ("", 0)
 
         self.header = PageHeader("Dashboard", "", kicker=_kicker_date())
         self.add(self.header)
@@ -240,6 +243,9 @@ class DashboardView(Page):
         self.top_card.body.addWidget(legend_host)
         cols.addWidget(self.top_card, 5)
         self.add(cols)
+
+        self.other_terms = OtherTermsCard(index=5)
+        self.add(self.other_terms)
         self.layout_.addStretch(1)
 
         bus.data_changed.connect(lambda: self.isVisible() and self.refresh())
@@ -285,6 +291,11 @@ class DashboardView(Page):
         week_ms = queries.total_ms(queries.week_start(), today) + live
         days_in = date.today().weekday() + 1
         self.t_week.set_number(week_ms, _short, f"{fmt.duration(week_ms / days_in, short=True)} per day on average")
+        if self._before_today[0] != today:  # everything before today changes once a day
+            first = queries.first_tracked_day() or today
+            yesterday = (date.today() - timedelta(days=1)).isoformat()
+            self._before_today = (today, queries.total_ms(first, yesterday) if first < today else 0)
+        self.other_terms.set_totals(today_ms, week_ms, self._before_today[1] + today_ms)
 
         profile = rewards.get_profile()
         streak = profile["streak"]
