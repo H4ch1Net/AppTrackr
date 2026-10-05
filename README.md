@@ -241,16 +241,17 @@ On headless Linux, Qt needs `libegl1` and `libxkbcommon0`, and tests run with `Q
 
 ### Releasing
 
-Bump `__version__` in `apptrackr/__init__.py`, then push a matching tag:
+Bump `__version__` in `apptrackr/__init__.py`, write the release page text (including how to update) in
+`docs/releases/<version>.md`, then push a matching tag:
 
 ```bash
 git tag v1.1.0
 git push origin v1.1.0
 ```
 
-`.github/workflows/release-windows.yml` checks that the tag matches the version, runs the tests, builds
-the PyInstaller bundle, self-tests it, packages the portable zip and the Inno Setup installer, and attaches
-both to the GitHub release. `ci.yml` runs lint and tests on Windows and Linux for every push and pull request.
+`.github/workflows/release-windows.yml` checks that the tag matches the version and that the release notes
+exist, runs the tests, builds the PyInstaller bundle, self-tests it, packages the portable zip and the Inno
+Setup installer, and publishes both with the notes as the GitHub release. `ci.yml` runs lint and tests on Windows and Linux for every push and pull request.
 
 ### Project structure
 

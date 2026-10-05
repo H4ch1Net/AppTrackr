@@ -72,10 +72,19 @@ jobs:
             packaging/Output/AppTrackr_Setup.exe
             dist/AppTrackr_Portable.zip
 
+      - name: Check release notes
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        run: |
+          $notes = "docs/releases/${{ steps.version.outputs.value }}.md"
+          if (-not (Test-Path $notes)) { Write-Error "Missing $notes (update steps shown on the release page)"; exit 1 }
+
       - name: Publish release
         if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v2
         with:
+          name: AppTrackr ${{ steps.version.outputs.value }}
+          body_path: docs/releases/${{ steps.version.outputs.value }}.md
           files: |
             packaging/Output/AppTrackr_Setup.exe
             dist/AppTrackr_Portable.zip
