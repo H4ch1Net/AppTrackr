@@ -5,6 +5,11 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish: tag v<version> on this commit of main and create the GitHub release"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -73,16 +78,18 @@ jobs:
             dist/AppTrackr_Portable.zip
 
       - name: Check release notes
-        if: github.ref_type == 'tag'
+        if: github.ref_type == 'tag' || (inputs.publish && github.ref == 'refs/heads/main')
         shell: pwsh
         run: |
           $notes = "docs/releases/${{ steps.version.outputs.value }}.md"
           if (-not (Test-Path $notes)) { Write-Error "Missing $notes (update steps shown on the release page)"; exit 1 }
 
       - name: Publish release
-        if: github.ref_type == 'tag'
+        if: github.ref_type == 'tag' || (inputs.publish && github.ref == 'refs/heads/main')
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ steps.version.outputs.value }}
+          target_commitish: ${{ github.sha }}
           name: AppTrackr ${{ steps.version.outputs.value }}
           body_path: docs/releases/${{ steps.version.outputs.value }}.md
           files: |
