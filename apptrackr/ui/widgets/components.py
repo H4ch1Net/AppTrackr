@@ -989,7 +989,7 @@ class SegmentedControl(QFrame):
 
 
 class Toggle(QAbstractButton):
-    """Animated on/off switch."""
+    """On/off switch. The knob stretches while pressed and springs into place."""
 
     def __init__(self, checked: bool = False, parent=None):
         super().__init__(parent)
@@ -997,8 +997,12 @@ class Toggle(QAbstractButton):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
         self._knob = 1.0 if checked else 0.0
+        self._press = 0.0
+        self._hover = 0.0
         super().setChecked(checked)
         self.toggled.connect(self._animate)
+        self.pressed.connect(lambda: self._tween("press", 1.0, motion.FASTER))
+        self.released.connect(lambda: self._tween("press", 0.0, motion.FAST))
 
     def sizeHint(self) -> QSize:
         return QSize(40, 22)
@@ -1021,30 +1025,43 @@ class Toggle(QAbstractButton):
 
     def _animate(self, checked: bool) -> None:
         motion.tween(
-            self, self._knob, 1.0 if checked else 0.0, motion.FAST, self._set_knob, motion.EASY_EASE, key="knob"
+            self, self._knob, 1.0 if checked else 0.0, motion.GENTLE, self._set_knob, motion.SPRING, key="knob"
         )
+
+    def _tween(self, name: str, target: float, duration: int) -> None:
+        def apply(v: float) -> None:
+            setattr(self, f"_{name}", v)
+            self.update()
+
+        motion.tween(self, getattr(self, f"_{name}"), target, duration, apply, motion.DECELERATE, key=name)
+
+    def enterEvent(self, event):
+        self._tween("hover", 1.0, motion.FAST)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._tween("hover", 0.0, motion.NORMAL)
+        super().leaveEvent(event)
 
     def paintEvent(self, _event):
         t = theme.current()
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         r = QRectF(1, 2, 38, 18)
-        off, on = QColor(t.border_strong), QColor(t.text)
-        track = QColor(
-            int(off.red() + (on.red() - off.red()) * self._knob),
-            int(off.green() + (on.green() - off.green()) * self._knob),
-            int(off.blue() + (on.blue() - off.blue()) * self._knob),
-        )
+        k = max(0.0, min(1.0, self._knob))  # colours never overshoot; position may
+        off = theme._mix(t.border_strong, t.text_muted, 0.35 * self._hover)
+        track = QColor(theme._mix(off, t.text, k))
         if not self.isEnabled():
             track.setAlphaF(0.4)
         p.setPen(QPen(QColor(t.accent), 2) if self.hasFocus() else Qt.PenStyle.NoPen)
         p.setBrush(track)
         p.drawRoundedRect(r, 4, 4)
         p.setPen(Qt.PenStyle.NoPen)
-        knob = QColor(t.window) if self._knob > 0.5 else QColor(t.text_dim if t.dark else "#ffffff")
-        p.setBrush(knob)
-        x = 4 + self._knob * 20
-        p.drawRoundedRect(QRectF(x, 5, 12, 12), 2.5, 2.5)
+        p.setBrush(QColor(theme._mix(t.text_dim if t.dark else "#ffffff", t.window, k)))
+        stretch = 5 * self._press
+        width = 12 + stretch
+        x = 4 + self._knob * (20 - stretch)
+        p.drawRoundedRect(QRectF(x, 5, width, 12), 2.5, 2.5)
 
 
 class SettingRow(QWidget):

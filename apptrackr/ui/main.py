@@ -470,7 +470,7 @@ class MainWindow(QMainWindow):
                 msg = f"Streak extended to {streak['streak']} days"
                 if streak.get("reward"):
                     msg += f" ({fmt.reward(streak['reward'], ', ')})"
-                self.notify("Streak", msg)
+                self.notify("Streak", msg, kind="streaks")
                 bus.rewards_changed.emit()
             for app in self._limits.check(snap.app_id, snap.uncommitted_ms):
                 self.notify(
@@ -478,16 +478,21 @@ class MainWindow(QMainWindow):
                     f"{app['name']}: {fmt.duration(app['used_ms'], short=True)} today "
                     f"(limit {fmt.duration(app['daily_limit_ms'], short=True)})",
                     tone="warning",
+                    kind="limits",
                 )
         except Exception:
             log.exception("Background evaluation failed")
         self._update_badges()
 
-    def notify(self, title: str, message: str, tone: str = "success") -> None:
-        """Toast when the window is visible, tray notification otherwise."""
+    def notify(self, title: str, message: str, tone: str = "success", kind: str | None = None) -> None:
+        """Toast when the window is visible, tray notification otherwise (if that kind is on)."""
         if self.isVisible() and not self.isMinimized() and self.isActiveWindow():
             self.toast.show_message(message, tone)
-        elif getattr(self, "_tray", None) and db.get_bool("notifications_enabled", True):
+        elif (
+            getattr(self, "_tray", None)
+            and db.get_bool("notifications_enabled", True)
+            and (kind is None or db.get_bool(f"notify_{kind}", True))
+        ):
             self._tray.showMessage(title, message, QSystemTrayIcon.MessageIcon.Information, 6000)
 
     # ------------------------------------------------------------------
@@ -625,7 +630,12 @@ class MainWindow(QMainWindow):
         if not info:
             return
         self.set_update_available(info)
-        self.notify("Update available", f"{APP_NAME} {info.version} is available. Open Settings to install.", "info")
+        self.notify(
+            "Update available",
+            f"{APP_NAME} {info.version} is available. Open Settings to install.",
+            "info",
+            kind="updates",
+        )
 
     def set_update_available(self, info) -> None:
         self.ctx.update_info = info
@@ -656,6 +666,8 @@ def apply_app_theme(app: QApplication) -> None:
         db.get_setting("ui_mode", "dark"),
         db.get_setting("ui_theme", theme.DEFAULT_ACCENT),
         system_dark=system_prefers_dark(),
+        dark_palette=db.get_setting("ui_dark_palette", theme.DEFAULT_DARK),
+        light_palette=db.get_setting("ui_light_palette", theme.DEFAULT_LIGHT),
     )
     app.setPalette(theme.palette())
     app.setStyleSheet(theme.stylesheet(arrow_icon=_combo_arrow(theme.current().text_dim)))

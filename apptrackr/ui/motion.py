@@ -9,6 +9,7 @@ Usage guide:
 - exit / dismiss      ACCELERATE, FASTER-FAST
 - move / resize       EASY_EASE, NORMAL-GENTLE
 - data change         EASY_EASE, SLOW (staggered for series)
+- physical controls   SPRING, GENTLE (toggle knob)
 """
 
 from __future__ import annotations
@@ -48,6 +49,8 @@ def _bezier(x1: float, y1: float, x2: float, y2: float) -> QEasingCurve:
 DECELERATE = _bezier(0.1, 0.9, 0.2, 1.0)
 ACCELERATE = _bezier(0.9, 0.1, 1.0, 0.2)
 EASY_EASE = _bezier(0.33, 0.0, 0.67, 1.0)
+# Small overshoot for physical controls (switch knobs, check marks settling).
+SPRING = _bezier(0.34, 1.4, 0.64, 1.0)
 LINEAR = QEasingCurve(QEasingCurve.Type.Linear)
 
 _override: bool | None = None
@@ -216,14 +219,26 @@ def stagger_in(widgets: list[QWidget], step: int = 22, duration: int = FAST, lim
 
 
 def collapse(widget: QWidget, on_done: Callable, duration: int = NORMAL) -> None:
-    """Fade a widget out while shrinking its height to zero, then call *on_done*."""
+    """Fade a widget out while shrinking its height to zero, then call *on_done*.
+
+    *on_done* runs exactly once, also when a refresh destroys the widget mid-animation.
+    """
     if not enabled():
         on_done()
         return
+    done = False
+
+    def finish(*_args) -> None:
+        nonlocal done
+        if not done:
+            done = True
+            on_done()
+
+    widget.destroyed.connect(finish)
     widget.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
     height = widget.height()
     fade(widget, 1.0, 0.0, FAST, ACCELERATE)
-    tween(widget, height, 0, duration, lambda v: _set_max_height(widget, v), EASY_EASE, on_done, key="collapse")
+    tween(widget, height, 0, duration, lambda v: _set_max_height(widget, v), EASY_EASE, finish, key="collapse")
 
 
 def _set_max_height(widget: QWidget, value: float) -> None:

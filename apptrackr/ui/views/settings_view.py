@@ -7,12 +7,11 @@ import threading
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QRectF, QSize, Qt, QUrl, Signal
+from PySide6.QtCore import QObject, QPointF, QRectF, QSize, Qt, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QPainter, QPen
 from PySide6.QtWidgets import (
     QAbstractButton,
     QButtonGroup,
-    QComboBox,
     QFileDialog,
     QGridLayout,
     QHBoxLayout,
@@ -28,8 +27,9 @@ from ...core import autostart
 from ...data import db, export, queries
 from ...updater import apply as updater_apply
 from ...updater import check as updater
-from .. import fmt, motion, theme
+from .. import fmt, fonts, motion, theme
 from ..signals import bus, run_async
+from ..widgets.charts import _column
 from ..widgets.components import (
     Card,
     ElidedLabel,
@@ -41,19 +41,22 @@ from ..widgets.components import (
     button,
     clear_layout,
     divider,
+    eyebrow,
     label,
 )
+from ..widgets.controls import CheckBox, TickSlider
 
-IDLE_CHOICES = (
+IDLE_CHOICES = (  # slider stops, shortest first; 0 turns idle detection off
+    ("1m", 60),
+    ("2m", 120),
+    ("3m", 180),
+    ("5m", 300),
+    ("10m", 600),
+    ("15m", 900),
+    ("30m", 1800),
     ("Never", 0),
-    ("1 minute", 60),
-    ("2 minutes", 120),
-    ("3 minutes", 180),
-    ("5 minutes", 300),
-    ("10 minutes", 600),
-    ("15 minutes", 900),
-    ("30 minutes", 1800),
 )
+NOTIFY_KINDS = (("limits", "Daily limits"), ("streaks", "Streaks"), ("updates", "Updates"))
 SHORTCUTS = (
     ("Ctrl+1 … Ctrl+5", "Switch page"),
     ("Ctrl+,", "Settings"),
@@ -69,33 +72,164 @@ class _ProgressRelay(QObject):
     progress = Signal(int, int)
 
 
-class Swatch(QAbstractButton):
-    """Round accent color picker button."""
+PALETTE_NOTES = {
+    "Graphite": "Warm graphite. The default.",
+    "Carbon": "True black for OLED screens.",
+    "Midnight": "Deep blue night panel.",
+    "Paper": "Warm paper. The default.",
+    "Porcelain": "Cool, neutral white.",
+    "Sage": "Soft green-grey.",
+}
+
+
+class _Selectable(QAbstractButton):
+    """Checkable tile whose hover and selection states ease in and out."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setCheckable(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+        self._hover = 0.0
+        self._sel = 0.0
+        self.toggled.connect(self._on_toggled)
+
+    def _on_toggled(self, on: bool) -> None:
+        motion.tween(self, self._sel, 1.0 if on else 0.0, motion.GENTLE, self._set_sel, motion.DECELERATE, key="sel")
+
+    def set_checked_silently(self, on: bool) -> None:
+        self.blockSignals(True)
+        self.setChecked(on)
+        self.blockSignals(False)
+        self._sel = 1.0 if on else 0.0
+        self.update()
+
+    def _set_sel(self, v: float) -> None:
+        self._sel = v
+        self.update()
+
+    def _set_hover(self, v: float) -> None:
+        self._hover = v
+        self.update()
+
+    def enterEvent(self, event):
+        motion.tween(self, self._hover, 1.0, motion.FAST, self._set_hover, motion.DECELERATE, key="hover")
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        motion.tween(self, self._hover, 0.0, motion.NORMAL, self._set_hover, motion.EASY_EASE, key="hover")
+        super().leaveEvent(event)
+
+
+class Swatch(_Selectable):
+    """Accent picker: the accent as it will render on the current palette."""
 
     def __init__(self, name: str, color: str, parent=None):
         super().__init__(parent)
         self.name = name
         self.color = color
-        self.setCheckable(True)
         self.setToolTip(name)
         self.setAccessibleName(f"{name} accent")
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
 
     def sizeHint(self) -> QSize:
-        return QSize(28, 28)
+        return QSize(30, 30)
 
     def paintEvent(self, _event):
         t = theme.current()
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        if self.isChecked() or self.hasFocus():
-            p.setPen(QPen(QColor(t.text if self.isChecked() else t.accent), 1.5))
+        if self._sel > 0.01 or self.hasFocus():
+            ring = QColor(t.text if self.isChecked() else t.accent)
+            ring.setAlphaF(max(self._sel, 1.0 if self.hasFocus() else 0.0))
+            p.setPen(QPen(ring, 1.5))
             p.setBrush(Qt.BrushStyle.NoBrush)
-            p.drawRoundedRect(QRectF(1.5, 1.5, 25, 25), 5, 5)
+            p.drawRoundedRect(QRectF(1.5, 1.5, 27, 27), 5, 5)
+        inset = 7 - 1.5 * self._hover + 1.0 * self._sel
         p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor(self.color))
-        p.drawRoundedRect(QRectF(6, 6, 16, 16), 3, 3)
+        p.setBrush(QColor(theme.fit_accent(self.color, theme.current())))
+        p.drawRoundedRect(QRectF(inset, inset, 30 - 2 * inset, 30 - 2 * inset), 3, 3)
+
+
+class ThemeTile(_Selectable):
+    """A palette rendered as a miniature AppTrackr window."""
+
+    W, H = 168, 104
+
+    def __init__(self, palette: str, parent=None):
+        super().__init__(parent)
+        self.palette = palette
+        self.active = False  # palette currently on screen (vs. chosen for the other mode)
+        self.setToolTip(f"{palette}: {PALETTE_NOTES.get(palette, '')}")
+        self.setAccessibleName(f"{palette} palette")
+
+    def sizeHint(self) -> QSize:
+        return QSize(self.W, self.H + 40)
+
+    def paintEvent(self, _event):
+        t = theme.current()
+        pv = theme.build(self.palette, theme.accent_name())
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        frame = QRectF(1, 1, self.W - 2, self.H - 2)
+        ring = QColor(t.accent if self.active else t.text_dim)
+        edge = QColor(t.border_strong)
+        if self._hover:
+            edge = QColor(theme._mix(t.border_strong, t.text_muted, self._hover))
+        p.setPen(QPen(edge, 1))
+        p.setBrush(QColor(pv.window))
+        p.drawRoundedRect(frame, 6, 6)
+        # Sidebar with nav lines; the first is the current page.
+        side = QRectF(frame.left() + 1, frame.top() + 1, 34, frame.height() - 2)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(pv.sidebar))
+        p.drawRoundedRect(side, 5, 5)
+        p.drawRect(QRectF(side.right() - 6, side.top(), 6, side.height()))
+        for i in range(4):
+            y = side.top() + 16 + i * 11
+            p.setBrush(QColor(pv.surface_alt if i == 0 else pv.sidebar))
+            p.drawRoundedRect(QRectF(side.left() + 4, y - 3, side.width() - 8, 8), 2, 2)
+            p.setBrush(QColor(pv.text if i == 0 else pv.text_muted))
+            p.drawRoundedRect(QRectF(side.left() + 9, y, 14 if i else 18, 2), 1, 1)
+            if i == 0:
+                p.setBrush(QColor(pv.accent))
+                p.drawRect(QRectF(side.left() + 4, y - 3, 1.5, 8))
+        # Panel with a hero number line and bars: history in ink, now in the accent.
+        panel = QRectF(side.right() + 8, frame.top() + 10, frame.right() - side.right() - 18, frame.height() - 20)
+        p.setPen(QPen(QColor(pv.border), 1))
+        p.setBrush(QColor(pv.surface))
+        p.drawRoundedRect(panel, 4, 4)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(pv.text_muted))
+        p.drawRoundedRect(QRectF(panel.left() + 8, panel.top() + 8, 26, 2), 1, 1)
+        p.setBrush(QColor(pv.text))
+        p.drawRoundedRect(QRectF(panel.left() + 8, panel.top() + 15, 44, 6), 2, 2)
+        base = panel.bottom() - 9
+        p.setPen(QPen(QColor(pv.border), 1))
+        p.drawLine(QPointF(panel.left() + 8, base + 0.5), QPointF(panel.right() - 8, base + 0.5))
+        p.setPen(Qt.PenStyle.NoPen)
+        heights = (14, 26, 30, 18, 9, 22, 28, 12)
+        slot = (panel.width() - 16) / len(heights)
+        for i, h in enumerate(heights):
+            p.setBrush(QColor(pv.accent if i == len(heights) - 1 else pv.ink))
+            p.drawPath(_column(panel.left() + 8 + i * slot + slot * 0.2, base, slot * 0.6, h, 1.5))
+        # Selection ring eases in around the preview.
+        if self._sel > 0.01:
+            ring.setAlphaF(self._sel)
+            p.setPen(QPen(ring, 2))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            grow = 2 * (1 - self._sel)
+            p.drawRoundedRect(frame.adjusted(-grow, -grow, grow, grow).adjusted(0.5, 0.5, -0.5, -0.5), 6, 6)
+        if self.hasFocus():
+            p.setPen(QPen(QColor(t.accent), 1, Qt.PenStyle.DashLine))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawRoundedRect(frame.adjusted(-3, -3, 3, 3), 8, 8)
+        # Caption: engraved name and a one-line note.
+        p.setPen(QColor(t.text if self.isChecked() else t.text_dim))
+        p.setFont(fonts.mono(10, 500, 8))
+        p.drawText(QPointF(2, self.H + 16), self.palette.upper())
+        p.setPen(QColor(t.text_muted))
+        p.setFont(fonts.sans(11))
+        p.drawText(QPointF(2, self.H + 32), PALETTE_NOTES.get(self.palette, ""))
 
 
 class SettingsView(Page):
@@ -150,12 +284,23 @@ class SettingsView(Page):
         )
         card.body.addWidget(divider())
         self.notifications = Toggle()
-        self.notifications.toggled.connect(lambda on: self._save("notifications_enabled", on))
+        self.notifications.toggled.connect(self._set_notifications)
         card.body.addWidget(
-            SettingRow(
-                "Notifications", "Daily limits, streaks and updates while the window is hidden.", self.notifications
-            )
+            SettingRow("Notifications", "Shown by Windows while the AppTrackr window is hidden.", self.notifications)
         )
+        kinds = QHBoxLayout()
+        kinds.setContentsMargins(0, 0, 0, 6)
+        kinds.setSpacing(20)
+        self.notify_boxes: dict[str, CheckBox] = {}
+        for key, text in NOTIFY_KINDS:
+            box = CheckBox(text)
+            box.toggled.connect(
+                lambda on, k=key, t=text: self._save(f"notify_{k}", on, f"{t} notifications {'on' if on else 'off'}")
+            )
+            self.notify_boxes[key] = box
+            kinds.addWidget(box)
+        kinds.addStretch(1)
+        card.body.addLayout(kinds)
         card.body.addWidget(divider())
         self.rewards = Toggle()
         self.rewards.toggled.connect(self._set_rewards)
@@ -170,10 +315,9 @@ class SettingsView(Page):
 
     def _build_tracking(self) -> None:
         card = Card("Tracking", index=2)
-        self.idle = QComboBox()
-        for text, sec in IDLE_CHOICES:
-            self.idle.addItem(text, sec)
-        self.idle.currentIndexChanged.connect(self._set_idle)
+        self.idle = TickSlider(list(IDLE_CHOICES))
+        self.idle.setAccessibleName("Idle timeout")
+        self.idle.committed.connect(self._set_idle)
         card.body.addWidget(
             SettingRow(
                 "Idle timeout",
@@ -208,7 +352,26 @@ class SettingsView(Page):
         card = Card("Appearance", index=3)
         self.mode = SegmentedControl(["Dark", "Light", "System"])
         self.mode.changed.connect(self._set_mode)
-        card.body.addWidget(SettingRow("Theme", "", self.mode))
+        card.body.addWidget(SettingRow("Mode", "System follows Windows' app mode.", self.mode))
+        card.body.addWidget(divider())
+        card.body.addWidget(
+            SettingRow("Palette", "One for dark mode and one for light mode. System switches between them.")
+        )
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(16)
+        grid.setVerticalSpacing(6)
+        self.tiles: dict[str, ThemeTile] = {}
+        for row, (kind, names) in enumerate((("Dark", theme.DARK_PALETTES), ("Light", theme.LIGHT_PALETTES))):
+            heading = eyebrow(kind)
+            heading.setContentsMargins(0, 12 if row else 2, 0, 0)
+            grid.addWidget(heading, row * 2, 0, 1, 3)
+            for col, name in enumerate(names):
+                tile = ThemeTile(name)
+                tile.clicked.connect(lambda _=False, n=name: self._set_palette(n))
+                self.tiles[name] = tile
+                grid.addWidget(tile, row * 2 + 1, col, Qt.AlignmentFlag.AlignLeft)
+        grid.setColumnStretch(3, 1)
+        card.body.addLayout(grid)
         card.body.addWidget(divider())
         swatches = QWidget()
         lay = QHBoxLayout(swatches)
@@ -222,7 +385,9 @@ class SettingsView(Page):
             self.swatches[name] = sw
             sw.clicked.connect(lambda _=False, n=name: self._set_accent(n))
             lay.addWidget(sw)
-        card.body.addWidget(SettingRow("Accent color", "", swatches))
+        card.body.addWidget(
+            SettingRow("Accent color", "Marks what is live, selected or current. Adjusted per palette.", swatches)
+        )
         card.body.addWidget(divider())
         self.animations = Toggle()
         self.animations.toggled.connect(self._set_animations)
@@ -322,17 +487,18 @@ class SettingsView(Page):
         self.feed.setText(db.get_setting("update_url", ""))
 
         idle = db.get_int("idle_threshold_sec", 300)
-        idx = self.idle.findData(idle)
-        if idx < 0:
-            self.idle.addItem(fmt.duration(idle * 1000), idle)
-            idx = self.idle.count() - 1
-        self.idle.blockSignals(True)
-        self.idle.setCurrentIndex(idx)
-        self.idle.blockSignals(False)
+        if self.idle.index_of(idle) < 0:  # a value set outside the slider keeps its own stop
+            stops = [s for s in IDLE_CHOICES if s[1]] + [(fmt.duration(idle * 1000, short=True), idle)]
+            self.idle.set_stops(sorted(stops, key=lambda s: s[1]) + [IDLE_CHOICES[-1]])
+        self.idle.set_stop_value(idle)
+        for key, box in self.notify_boxes.items():
+            box.set_silently(db.get_bool(f"notify_{key}", True))
+            box.setEnabled(self.notifications.isChecked())
 
         self.animations.set_silently(motion.enabled())
         self.mode.set_current(theme.MODES.index(theme.mode()))
         self.swatches[theme.accent_name()].setChecked(True)
+        self._sync_tiles()
         self.db_path.setText(f"Database: {db.db_path()}")
         self._fill_excluded()
 
@@ -378,11 +544,15 @@ class SettingsView(Page):
         self.ctx.window.apply_rewards_visibility()
         self.ctx.toast("Rewards turned on" if on else "Rewards turned off")
 
-    def _set_idle(self) -> None:
-        sec = self.idle.currentData()
+    def _set_idle(self, sec: int) -> None:
         db.set_setting("idle_threshold_sec", sec)
         self.ctx.tracker.reload_settings()
-        self.ctx.toast("Idle detection off" if not sec else f"Idle after {self.idle.currentText()}")
+        self.ctx.toast("Idle detection off" if not sec else f"Idle after {fmt.duration(sec * 1000)}")
+
+    def _set_notifications(self, on: bool) -> None:
+        self._save("notifications_enabled", on)
+        for box in self.notify_boxes.values():
+            box.setEnabled(on)
 
     def _set_clicks(self, on: bool) -> None:
         db.set_setting("track_clicks", on)
@@ -401,6 +571,23 @@ class SettingsView(Page):
     def _set_accent(self, name: str) -> None:
         db.set_setting("ui_theme", name)
         self.ctx.window.apply_theme()
+
+    def _set_palette(self, name: str) -> None:
+        kind = "dark" if name in theme.DARK_PALETTES else "light"
+        db.set_setting(f"ui_{kind}_palette", name)
+        if theme.mode() != "system":
+            db.set_setting("ui_mode", kind)  # picking a palette shows it
+        self.ctx.window.apply_theme()
+        self._sync_tiles()
+
+    def _sync_tiles(self) -> None:
+        shown = theme.current().name
+        chosen = {theme.palette_choice("dark"), theme.palette_choice("light")}
+        for name, tile in self.tiles.items():
+            tile.active = name == shown
+            if tile.isChecked() != (name in chosen):
+                tile.setChecked(name in chosen)
+            tile.update()
 
     def _include(self, app: dict, row: QWidget) -> None:
         queries.set_hidden(app["app_id"], False)

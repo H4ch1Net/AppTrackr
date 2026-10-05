@@ -250,9 +250,16 @@ class RewardsView(Page):
         n = len(group["event_ids"])
         text.addWidget(label(f"{n} milestone{'s' if n != 1 else ''}", "caption"))
         lay.addLayout(text, 1)
-        amounts = label(fmt.reward(group["reward"], "  ·  "), "tick")
+        # Items keep together (non-breaking spaces) and wrap between each other on narrow windows.
+        parts = [part.replace(" ", "\u00a0") for part in fmt.reward(group["reward"], "|").split("|")]
+        amounts = label(
+            "\u00a0·  ".join(parts),
+            "tick",
+            wrap=True,
+            align=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+        )
         amounts.setFont(fonts.mono(10, 500, 2))
-        lay.addWidget(amounts)
+        lay.addWidget(amounts, 2)
         lay.addWidget(button("Claim", on_click=lambda ids=group["event_ids"]: self._claim(ids, row)))
         return row
 
@@ -286,7 +293,7 @@ class RewardsView(Page):
         animate_progress(bar, self._progress.get(item["app_id"], 0), value)
         row.bar_value = value
         if nxt:
-            col.addWidget(label(f"Next: {fmt.reward(nxt['reward'], ', ')}", "caption"))
+            col.addWidget(label(f"Next: {fmt.reward(nxt['reward'], ', ')}", "caption", wrap=True))
         else:
             col.addWidget(label("All milestones reached today", "caption"))
         lay.addLayout(col, 1)
@@ -336,16 +343,18 @@ class RewardsView(Page):
             animate_progress(self.progress, shown["into"], into)
 
     def _claim(self, event_ids: list[int], row: QWidget) -> None:
-        motion.collapse(row, lambda: self._report(rewards.claim_many(event_ids)))
+        applied = rewards.claim_many(event_ids)  # claim first; the animation only presents it
+        motion.collapse(row, lambda: self._report(applied))
 
     def _claim_all(self) -> None:
         rows = [r for r in self._pending_rows if r is not None]
         if not rows:
             return
         self.claim_all.setEnabled(False)
+        applied = rewards.claim_many()
         for row in rows[1:]:
             motion.collapse(row, lambda: None)
-        motion.collapse(rows[0], lambda: self._report(rewards.claim_many()))
+        motion.collapse(rows[0], lambda: self._report(applied))
 
     def _report(self, applied: dict) -> None:
         bus.rewards_changed.emit()  # refreshes this page while it is visible
@@ -373,14 +382,12 @@ class RewardsView(Page):
         self._changed()
 
     def _remove_app(self, app_id: int, name: str, row: QWidget) -> None:
-        def remove():
-            rules.enable_app_rewards(app_id, False)
-            self._changed()
+        rules.enable_app_rewards(app_id, False)
 
         def undo():
             rules.enable_app_rewards(app_id, True)
             self._added_app = app_id
             self._changed()
 
-        motion.collapse(row, remove)
+        motion.collapse(row, self._changed)
         self.ctx.toast(f"{name} no longer earns rewards", "info", "Undo", undo)

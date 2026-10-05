@@ -11,7 +11,6 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from dataclasses import replace
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -143,9 +142,7 @@ def main() -> int:
         instrument(p, t, QRectF(w - 40 - 270, 40, 270, h - 80), "Today")
         text(p, 40, h - 40, "github.com/H4ch1Net/AppTrackr", fonts.mono(9, 500, 6), t.text_muted)
 
-    accent = theme.ACCENTS[theme.DEFAULT_ACCENT]
-    dark = replace(theme.GRAPHITE, accent=accent)
-    light = replace(theme.PAPER, accent=accent)
+    dark, light = theme.build(theme.DEFAULT_DARK), theme.build(theme.DEFAULT_LIGHT)
     render("banner-dark.png", dark, 880, 280, banner)
     render("banner-light.png", light, 880, 280, banner)
     render("social-preview.png", dark, 640, 320, social)

@@ -38,18 +38,19 @@ from ..widgets.components import (
     eyebrow,
     label,
 )
+from ..widgets.controls import TickSlider
 
-LIMITS = (
-    ("No limit", 0),
-    ("15 minutes", 15),
-    ("30 minutes", 30),
-    ("45 minutes", 45),
-    ("1 hour", 60),
-    ("1.5 hours", 90),
-    ("2 hours", 120),
-    ("3 hours", 180),
-    ("4 hours", 240),
-    ("6 hours", 360),
+LIMITS = (  # slider stops in minutes; 0 removes the limit
+    ("Off", 0),
+    ("15m", 15),
+    ("30m", 30),
+    ("45m", 45),
+    ("1h", 60),
+    ("1h30", 90),
+    ("2h", 120),
+    ("3h", 180),
+    ("4h", 240),
+    ("6h", 360),
 )
 MINUTE = 60_000
 
@@ -119,13 +120,11 @@ class AppDetailView(Page):
             SettingRow("Category", "Groups apps on the dashboard and in filters.", self.category)
         )
         self.settings_card.body.addWidget(divider())
-        self.limit = QComboBox()
-        for text, minutes in LIMITS:
-            self.limit.addItem(text, minutes)
-        self.limit.currentIndexChanged.connect(self._on_limit)
-        self.settings_card.body.addWidget(
-            SettingRow("Daily limit", "Get a notification once today's time passes it.", self.limit)
-        )
+        self.limit = TickSlider(list(LIMITS))
+        self.limit.setAccessibleName("Daily limit")
+        self.limit.committed.connect(self._on_limit)
+        self.settings_card.body.addWidget(SettingRow("Daily limit", "Get a notification once today's time passes it."))
+        self.settings_card.body.addWidget(self.limit)
         self.rewards_divider = divider()
         self.settings_card.body.addWidget(self.rewards_divider)
         self.rewards_toggle = Toggle()
@@ -183,9 +182,12 @@ class AppDetailView(Page):
 
         self._set_combo(self.category, app.get("category"))
         limit_minutes = (app.get("daily_limit_ms") or 0) // MINUTE
-        if self.limit.findData(limit_minutes) < 0:
-            self.limit.addItem(fmt.duration(limit_minutes * MINUTE), limit_minutes)
-        self._set_combo(self.limit, limit_minutes)
+        stops = list(LIMITS)
+        if all(v != limit_minutes for _, v in stops):  # a limit set elsewhere keeps its own stop
+            stops = sorted([*stops, (fmt.axis(limit_minutes * MINUTE).lower(), limit_minutes)], key=lambda s: s[1])
+        if stops != self.limit._stops:
+            self.limit.set_stops(stops)
+        self.limit.set_stop_value(limit_minutes)
 
         on = rewards.enabled()
         for w in (self.rewards_divider, self.rewards_row, self.reward_hint):
@@ -235,7 +237,7 @@ class AppDetailView(Page):
         )
         self.chart_card.set_caption(
             "Focused time per day"
-            + (f" · dashed line is your {fmt.duration(limit_ms, short=True)} limit" if limit_ms else "")
+            + (f" · the line marks your {fmt.duration(limit_ms, short=True)} limit" if limit_ms else "")
         )
 
         self._fill_facts(app)
@@ -332,10 +334,10 @@ class AppDetailView(Page):
             queries.set_category(self.app_id, self.category.currentData())
             bus.data_changed.emit()
 
-    def _on_limit(self) -> None:
+    def _on_limit(self, minutes: int) -> None:
         if self.app_id is None:
             return
-        minutes = self.limit.currentData() or 0
+        minutes = minutes or 0
         queries.set_daily_limit(self.app_id, minutes * MINUTE)
         bus.data_changed.emit()
         self.ctx.toast(f"Daily limit set to {fmt.duration(minutes * MINUTE)}" if minutes else "Daily limit removed")
