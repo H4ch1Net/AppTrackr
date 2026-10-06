@@ -260,8 +260,8 @@ class AppDetailView(Page):
             val = label(value)
             val.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             self.facts_grid.addWidget(val, row, 1)
-        # The all-time total retold: a different yardstick for each app.
-        retold = perspective.pick(summary["total_ms"] / 60000, 1, offset=self.app_id or 0)
+        # The all-time total retold: one of the best few yardsticks, a different one from app to app.
+        retold = perspective.pick(summary["total_ms"] / 60000, 1, offset=(self.app_id or 0) % 3)
         if retold:
             fact = retold[0]
             row = len(facts)
