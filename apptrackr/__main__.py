@@ -141,8 +141,10 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     if not args.demo:
         from apptrackr.core import autostart
+        from apptrackr.rewards import rules
 
         autostart.repair()
+        rules.adopt_favorites_once()
     if args.demo:
         from apptrackr.data import demo
 

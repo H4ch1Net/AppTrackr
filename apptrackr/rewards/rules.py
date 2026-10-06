@@ -1,4 +1,4 @@
-"""Per-app reward rules."""
+"""Per-app reward rules. An app with enabled rules is a focus app."""
 
 from __future__ import annotations
 
@@ -47,3 +47,21 @@ def app_rewards_enabled(app_id: int) -> bool:
 
 def earning_app_ids() -> set[int]:
     return {r["app_id"] for r in db.fetchall("SELECT DISTINCT app_id FROM reward_rules WHERE enabled = 1")}
+
+
+def adopt_favorites_once() -> int:
+    """On the first start of 1.2: with no focus apps chosen yet, favorites become focus apps.
+
+    Favorites drove the streak before 1.2; this keeps a streak growing after the
+    update. Runs once; returns how many apps were adopted.
+    """
+    if db.get_bool("focus_apps_adopted"):
+        return 0
+    adopted = 0
+    if not earning_app_ids():
+        rows = db.fetchall("SELECT app_id FROM apps WHERE is_favorite = 1 AND is_hidden = 0")
+        for row in rows:
+            enable_app_rewards(row["app_id"], True)
+        adopted = len(rows)
+    db.set_setting("focus_apps_adopted", True)
+    return adopted

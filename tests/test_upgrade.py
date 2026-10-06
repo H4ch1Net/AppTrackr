@@ -155,6 +155,17 @@ def test_upgraded_data_works_in_this_version(upgraded):
     xp = engine.get_profile()["xp"]
     applied = engine.claim_reward(pending[0]["event_id"])
     assert engine.get_profile()["xp"] == xp + applied.get("xp", 0)
+    # 1.x earning apps are the focus apps now, and the old village keeps working.
+    from apptrackr.game import focus
+    from apptrackr.rewards import rules
+
+    assert focus.focus_app_ids() == {queries.find_app_id("code.exe")}
+    assert rules.adopt_favorites_once() == 0
+    inventory = dict(game_state.get_village()["inventory"])
+    game_state.collect()
+    village = game_state.get_village()
+    assert all(village["inventory"][r] >= n for r, n in inventory.items())
+    assert game_state.building_level(village, "workshop") == 1
     assert theme.configure(accent=db.get_setting("ui_theme")).accent == theme.build("Graphite", "Purple").accent
     assert db.get_int("idle_threshold_sec") == 600 and db.get_bool("minimize_to_tray", True) is False
     theme.configure("dark", theme.DEFAULT_ACCENT)

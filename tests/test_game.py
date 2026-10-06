@@ -215,3 +215,19 @@ def test_attention_counts_chests_harvests_and_old_rewards():
     assert engine.attention_count() == 2
     db.set_setting("rewards_enabled", False)
     assert engine.attention_count() == 0
+
+
+def test_favorites_become_focus_apps_once_after_updating():
+    fav = queries.get_or_create_app("figma.exe")
+    queries.set_favorite(fav, True)
+    assert rules.adopt_favorites_once() == 1
+    assert focus.focus_app_ids() == {fav}
+    rules.enable_app_rewards(fav, False)
+    assert rules.adopt_favorites_once() == 0  # only once: removing it later sticks
+
+
+def test_chosen_focus_apps_are_not_overridden_by_favorites():
+    chosen = _focus_app()
+    queries.set_favorite(queries.get_or_create_app("game.exe"), True)
+    assert rules.adopt_favorites_once() == 0
+    assert focus.focus_app_ids() == {chosen}

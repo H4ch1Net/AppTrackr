@@ -14,7 +14,7 @@ shows it as a dashboard, calendar and per-app history, and stays out of the way 
 ![Python](https://img.shields.io/badge/python-3.10%2B-3776ab)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-<img src="docs/screenshots/demo.gif" alt="AppTrackr in motion: dashboard, calendar, apps, rewards and a theme switch" width="900">
+<img src="docs/screenshots/demo.gif" alt="AppTrackr in motion: dashboard, calendar, apps, focus, village harvest and a theme switch" width="900">
 
 </div>
 
@@ -25,8 +25,8 @@ in front of you: time is credited only to the focused app, stops when you go idl
 screen, and is written to a local SQLite database every 30 seconds. Nothing leaves your machine.
 
 On top of the raw numbers it adds the things you reach for next: a heatmap calendar, per-app
-trends and sessions, daily limits with notifications, and an optional rewards layer that turns
-time in chosen apps into XP and a small village-building game.
+trends and sessions, daily limits with notifications, a floating timer over other apps, and an
+optional idle game that rewards staying focused in the apps you choose.
 
 ## Features
 
@@ -39,7 +39,8 @@ time in chosen apps into XP and a small village-building game.
 | Apps | Search, period filter (today to all time), category and favorite filters, sort by time, launches or clicks |
 | App detail | Today / 7 / 30 day totals, 30-day chart, recent sessions, first and last seen, longest session, rename, category |
 | Control | Per-app daily limits with notifications, per-type notification switches, exclude any app (with undo), pause from the tray for a set time |
-| Rewards | Optional XP, levels, streaks and a village-building game whose buildings boost future rewards |
+| Focus game | Optional idle game: unbroken time in your focus apps builds flow (x1 to x3), flow powers a village that produces resources while you work, and a daily focus goal grows a streak and opens a chest |
+| Floating timer | A small always-on-top clock over other apps with the time in the current app, today's total and, for focus apps, the flow tier; hides over full-screen windows |
 | Desktop | Tray icon with live tooltip, launch at sign-in (starts hidden), single instance, six palettes (three dark, three light) with system switching and 8 accents |
 | Motion | Fluent-timed page transitions, odometer readouts, springy switches, check marks that draw in, a gliding fader, hover fades and a tick burst on claims and builds; follows Windows *Animation effects* and can be turned off in Settings |
 | Data | CSV and JSON export, consistent database backup and validated restore, automatic schema migrations |
@@ -54,11 +55,11 @@ time in chosen apps into XP and a small village-building game.
   </tr>
   <tr>
     <td><img src="docs/screenshots/apps.png" alt="Apps"><br><sub>All apps for a period, filterable and sortable</sub></td>
-    <td><img src="docs/screenshots/app-detail.png" alt="App detail"><br><sub>Per-app history, limit, rewards and sessions</sub></td>
+    <td><img src="docs/screenshots/app-detail.png" alt="App detail"><br><sub>Per-app history, limit, focus switch and sessions</sub></td>
   </tr>
   <tr>
-    <td><img src="docs/screenshots/rewards.png" alt="Rewards"><br><sub>Level progress, pending rewards and earning apps</sub></td>
-    <td><img src="docs/screenshots/village.png" alt="Village"><br><sub>Village: buildings, inventory and market</sub></td>
+    <td><img src="docs/screenshots/rewards.png" alt="Focus"><br><sub>Focus: live flow multiplier, tier ladder, daily goal and chest</sub></td>
+    <td><img src="docs/screenshots/village.png" alt="Village"><br><sub>Village: harvest, production, buildings and market</sub></td>
   </tr>
   <tr>
     <td><img src="docs/screenshots/dashboard-perspective.png" alt="In other terms"><br><sub>In other terms: the week as Voyager kilometres, marathons and Everest</sub></td>
@@ -135,9 +136,17 @@ use **Quit** from the tray menu (or <kbd>Ctrl</kbd>+<kbd>Q</kbd>) to stop it.
   the dashboard and charts mark the limit.
 - **Exclude an app.** Right-click it in any list and choose *Exclude from tracking*. Manage exclusions in
   Settings.
-- **Favorites and streaks.** Star apps you want to spend time in. A streak day needs 30 minutes in favorites.
-- **Rewards.** Pick earning apps on the Rewards page or from an app's page. Milestones (30 min, 1 h, 2 h, 5 h
-  of focus per day) pay XP and resources you spend in the village. Turn the whole layer off in Settings.
+- **Focus apps.** Pick the apps you want to spend time in (an editor, a design tool, docs) on the Focus page or
+  with the *Focus app* switch on an app's page. Only time in them counts toward the game.
+- **Flow.** Every minute in a focus app earns focus points. Stay with it and the run climbs tiers: x1.5 after
+  10 minutes, x2 after 25, x2.5 after 45, x3 after 75. A short look elsewhere (3 minutes, more with taverns)
+  does not end a run.
+- **Village.** Lumberyards, quarries, farms, mines and labs turn focus points into resources. They wait in the
+  harvest until you collect them on the Village page, up to what storage holds. Spend them on buildings.
+- **Daily goal.** Reach your focus goal (2 h by default, set in Settings) to grow your streak and open the
+  daily chest. Turn the whole game off in Settings.
+- **Floating timer.** While you work in another app, a small clock in the corner shows how long you have
+  been in it. Drag it anywhere, double-click it to open AppTrackr, right-click to hide it.
 - **In other terms.** The dashboard card retells today, this week or all time against known yardsticks.
   *Shuffle* shows others. Each comparison names its basis, for example "South Col to the summit and back
   down: about 14 h".
@@ -146,7 +155,7 @@ use **Quit** from the tray menu (or <kbd>Ctrl</kbd>+<kbd>Q</kbd>) to stop it.
 
 | Keys | Action |
 | --- | --- |
-| <kbd>Ctrl</kbd>+<kbd>1</kbd> to <kbd>Ctrl</kbd>+<kbd>5</kbd> | Dashboard, Calendar, Apps, Rewards, Village |
+| <kbd>Ctrl</kbd>+<kbd>1</kbd> to <kbd>Ctrl</kbd>+<kbd>5</kbd> | Dashboard, Calendar, Apps, Focus, Village |
 | <kbd>Ctrl</kbd>+<kbd>,</kbd> | Settings |
 | <kbd>Ctrl</kbd>+<kbd>F</kbd> | Search apps |
 | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> | Pause or resume tracking |
@@ -265,14 +274,14 @@ apptrackr/
   perspective.py     yardsticks for 'In other terms' and how they are picked
   core/              tracker, platform (Win32), launch watcher, click counter, autostart, limits
   data/              SQLite access and migrations, queries, export/backup, app catalog, demo data
-  rewards/           milestone rules, reward engine, streaks
-  game/              village state and balance values
+  rewards/           focus app rules, XP and levels, daily goal and streak, rewards from 1.x
+  game/              flow and focus points, village production and harvest, balance values
   updater/           GitHub release check and installer download
   ui/                main window, theme and motion tokens, icons, views and shared widgets
   assets/            logo, Lucide and AppTrackr line icons, illustrations, bundled fonts
 packaging/           PyInstaller spec, Inno Setup script, app icon
 scripts/             screenshot, demo animation, README art and icon generators
-tests/               pytest suite (data, tracker, rewards, updater, offscreen UI)
+tests/               pytest suite (data, tracker, game, upgrades, updater, offscreen UI)
 ```
 
 ```mermaid
@@ -283,7 +292,8 @@ flowchart LR
     C[core.clicks] --> DB
     DB --> Q[data.queries]
     Q --> UI[ui views]
-    DB --> R[rewards.engine] --> G[game.state]
+    DB --> F[game.focus<br/>flow, focus points] --> G[game.state<br/>village, harvest]
+    G --> R[rewards.engine<br/>XP, streak]
     R --> UI
     G --> UI
     T -->|snapshot| UI
