@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import random
+import time
 from datetime import date, datetime, timedelta
 
 from . import db
@@ -108,21 +109,30 @@ def seed(days: int = 120, seed_value: int = 7, now: datetime | None = None) -> N
 
 
 def _seed_rewards(app_ids: dict[str, int]) -> None:
-    from ..rewards import engine, rules
+    from ..rewards import rules
 
     for exe in REWARD_APPS:
         rules.enable_app_rewards(app_ids[exe], True)
     yesterday = (date.today() - timedelta(days=1)).isoformat()
-    engine.evaluate(yesterday)
-    db.execute("UPDATE reward_events SET claimed = 1")
     db.execute(
         "UPDATE player_profile SET xp = 1240, level = 13, credits = 85, streak_days = 9, "
         "last_streak_day = ? WHERE profile_id = 1",
         (yesterday,),
     )
     village = {
-        "buildings": {"workshop": {"level": 3}, "storage": {"level": 2}, "house": {"level": 2}, "lab": {"level": 1}},
+        "buildings": {
+            "lumberyard": {"level": 4},
+            "quarry": {"level": 3},
+            "farm": {"level": 2},
+            "mine": {"level": 1},
+            "storage": {"level": 3},
+            "house": {"level": 2},
+            "workshop": {"level": 3},
+            "lab": {"level": 1},
+        },
         "villagers": 2,
-        "inventory": {"wood": 142, "stone": 96, "metal": 38, "food": 61, "blueprints": 3},
+        "inventory": {"wood": 342, "stone": 196, "metal": 38, "food": 161, "blueprints": 3},
+        "collected_until": time.time() - 3 * 3600,  # a harvest from the last three hours is waiting
+        "chests": {},
     }
     db.execute("UPDATE village_state SET state_json = ? WHERE profile_id = 1", (json.dumps(village),))

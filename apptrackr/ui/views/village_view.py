@@ -1,6 +1,9 @@
-"""Village: inventory, market and buildings that boost future rewards."""
+"""Village: the harvest your focus produced, production rates, buildings and the market."""
 
 from __future__ import annotations
+
+import time
+from datetime import date
 
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
 from PySide6.QtGui import QColor, QPainter, QPen
@@ -9,7 +12,7 @@ from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QProgressBar, QVBoxLayou
 from ...game import economy
 from ...game import state as game_state
 from ...rewards import engine as rewards
-from .. import fmt, icons, motion, theme
+from .. import fmt, fonts, icons, motion, theme
 from ..signals import bus
 from ..widgets.components import (
     PAGE_MARGIN,
@@ -28,6 +31,10 @@ from ..widgets.components import (
 )
 
 BUILDING_ICONS = {
+    "lumberyard": "tree-pine",
+    "quarry": "mountain",
+    "farm": "wheat",
+    "mine": "cog",
     "workshop": "hammer",
     "storage": "warehouse",
     "house": "house",
@@ -94,6 +101,12 @@ class LevelPips(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         p.setPen(Qt.PenStyle.NoPen)
+        if self._max > 12:  # long ladders read better as one bar
+            p.setBrush(QColor(t.track))
+            p.drawRoundedRect(QRectF(0, 0, self.width(), self.height()), 3, 3)
+            p.setBrush(QColor(t.text_dim))
+            p.drawRoundedRect(QRectF(0, 0, self.width() * min(1.0, self._level / self._max), self.height()), 3, 3)
+            return
         gap = 4
         w = (self.width() - gap * (self._max - 1)) / self._max
         for i in range(self._max):
@@ -113,19 +126,41 @@ class VillageView(Page):
         self.ctx = ctx
 
         self.header = PageHeader(
-            "Village", "Spend resources from rewards on buildings that boost future rewards.", kicker="Progress"
+            "Village", "Your village works while you focus. Collect what it made and build it up.", kicker="Progress"
         )
+        self.collect_btn = button("Collect", kind="primary", icon="sparkles", on_click=self._collect)
+        self.header.actions.addWidget(self.collect_btn)
         self.add(self.header)
 
         self.t_level = StatTile("Player level", framed=False)
         self.t_villagers = StatTile("Villagers", framed=False)
         self.t_credits = StatTile("Credits", framed=False)
-        self.t_bonus = StatTile("Active bonuses", framed=False)
+        self.t_bonus = StatTile("Production bonus", framed=False)
         self.add(MetricGrid([self.t_level, self.t_villagers, self.t_credits, self.t_bonus], columns=4))
 
-        row = QHBoxLayout()
+        top = self.stack_when_narrow(QHBoxLayout())
+        top.setSpacing(16)
+        self.harvest_card = Card("Harvest", "–", index=1)
+        self.harvest_grid = QGridLayout()
+        self.harvest_grid.setHorizontalSpacing(18)
+        self.harvest_grid.setVerticalSpacing(8)
+        self.harvest_card.body.addLayout(self.harvest_grid)
+        self.harvest_note = label("", "caption", wrap=True)
+        self.harvest_card.body.addWidget(self.harvest_note)
+        self.harvest_card.body.addStretch(1)
+        top.addWidget(self.harvest_card, 3)
+        self.production = Card("Production", "Per hour of focus at ×1. Flow multiplies it up to ×3.", index=2)
+        self.prod_grid = QGridLayout()
+        self.prod_grid.setHorizontalSpacing(12)
+        self.prod_grid.setVerticalSpacing(6)
+        self.production.body.addLayout(self.prod_grid)
+        self.production.body.addStretch(1)
+        top.addWidget(self.production, 2)
+        self.add(top)
+
+        row = self.stack_when_narrow(QHBoxLayout())
         row.setSpacing(16)
-        self.inventory = Card("Inventory", index=1)
+        self.inventory = Card("Inventory", index=3)
         self.inv_grid = QGridLayout()
         self.inv_grid.setHorizontalSpacing(12)
         self.inv_grid.setVerticalSpacing(10)
@@ -133,14 +168,14 @@ class VillageView(Page):
         self.inventory.body.addStretch(1)
         row.addWidget(self.inventory, 3)
 
-        self.market = Card("Market", "Trade credits for resources", index=2)
+        self.market = Card("Market", "Trade credits for resources", index=4)
         self.market_grid = QGridLayout()
         self.market_grid.setSpacing(8)
         self.market.body.addLayout(self.market_grid)
         row.addWidget(self.market, 2)
         self.add(row)
 
-        self.add(eyebrow("Buildings", 3))
+        self.add(eyebrow("Buildings", 5))
         self.buildings = QGridLayout()
         self.buildings.setSpacing(16)
         self.add(self.buildings)
@@ -151,6 +186,7 @@ class VillageView(Page):
         self._cards: dict[str, Card] = {}
         self._columns = 0
         self._just_built: str | None = None
+        self._ticks = 0
         bus.rewards_changed.connect(lambda: self.isVisible() and self.refresh())
 
     def refresh(self) -> None:
@@ -162,14 +198,12 @@ class VillageView(Page):
         into, need = economy.level_progress(profile["xp"])
         self.t_level.set_number(profile["level"], _count, f"{need - into} XP to next level")
         self.t_villagers.set_number(village.get("villagers", 0), _count, "One per house level")
-        self.t_credits.set_number(profile["credits"], lambda v: fmt.count(int(round(v))), "Earned by leveling up")
-        active = [
-            f"+{bonuses['xp_bonus_pct']}% XP" if bonuses["xp_bonus_pct"] else "",
-            f"+{bonuses['resource_bonus_pct']}% resources" if bonuses["resource_bonus_pct"] else "",
-            f"+{bonuses['streak_bonus_pct']}% streak" if bonuses["streak_bonus_pct"] else "",
-        ]
-        active = [a for a in active if a]
-        self.t_bonus.set(str(len(active)), ", ".join(active) or "Build to unlock bonuses")
+        self.t_credits.set_number(profile["credits"], lambda v: fmt.count(int(round(v))), "From levels and chests")
+        extras = [f"+{bonuses['xp_bonus_pct']}% XP" if bonuses["xp_bonus_pct"] else ""]
+        extras.append(f"flow grace {int(bonuses['grace_sec'] // 60)} min")
+        self.t_bonus.set(f"+{bonuses['production_pct']}%", ", ".join(e for e in extras if e))
+        self._fill_harvest(village)
+        self._fill_production(village)
 
         clear_layout(self.inv_grid)
         inv = village["inventory"]
@@ -201,7 +235,7 @@ class VillageView(Page):
         clear_layout(self.market_grid)
         for i, (res, (amount, price)) in enumerate(economy.MARKET.items()):
             self.market_grid.addWidget(icon_label(RESOURCE_ICONS[res], "text_dim", 15), i, 0)
-            self.market_grid.addWidget(label(f"{amount} {res}"), i, 1)
+            self.market_grid.addWidget(label(fmt.amount(amount, res)), i, 1)
             btn = button(f"{price} credits", on_click=lambda r=res: self._buy(r))
             btn.setEnabled(profile["credits"] >= price and inv.get(res, 0) < cap)
             if inv.get(res, 0) >= cap:
@@ -225,6 +259,87 @@ class VillageView(Page):
 
             QTimer.singleShot(0, card, celebrate)
         self._just_built = None
+
+    def tick(self) -> None:
+        self._ticks += 1
+        if self._ticks % 5 == 0:  # the harvest grows while you focus
+            self._fill_harvest(game_state.get_village())
+
+    def _fill_harvest(self, village: dict) -> None:
+        crop = game_state.harvest(village=village)
+        clear_layout(self.harvest_grid)
+        rates = game_state.production_rates(village)
+        items = [(res, crop["resources"].get(res, 0)) for res in economy.RESOURCES if res in rates]
+        items = [item for item in items if item[1]] or items[:3]  # skip what has not made a whole unit yet
+        items.append(("xp", crop["xp"]))
+        for i, (res, amount) in enumerate(items):
+            cell = QHBoxLayout()
+            cell.setSpacing(8)
+            cell.addWidget(icon_label(RESOURCE_ICONS.get(res, "sparkles"), "text_dim", 16))
+            value = label(f"+{fmt.count(amount)}")
+            value.setFont(fonts.sans(17, 600, tabular=True))
+            cell.addWidget(value)
+            cell.addWidget(label(fmt.amount(amount, res).split(" ", 1)[1], "caption"))
+            cell.addStretch(1)
+            host = QWidget()
+            host.setLayout(cell)
+            self.harvest_grid.addWidget(host, i // 3, i % 3)
+        since = (
+            fmt.time_of_day(crop["since"])
+            if crop["since"] > time.time() - 86400
+            else fmt.short_date(date.fromtimestamp(crop["since"]).isoformat())
+        )
+        if crop["focus_ms"]:
+            self.harvest_card.set_caption(
+                f"{fmt.duration(crop['focus_ms'], short=True)} of focus since {since}, "
+                f"{fmt.count(int(crop['points']))} focus points"
+            )
+        else:
+            self.harvest_card.set_caption(f"No focus since {since}. Work in a focus app and your village gets busy.")
+        if crop["full"]:
+            self.harvest_note.setText(
+                "Storage is full for " + ", ".join(crop["full"]) + ". Collect, spend or build storage to keep the rest."
+            )
+        else:
+            self.harvest_note.setText("")
+        ready = any(crop["resources"].values()) or crop["xp"] > 0
+        self.collect_btn.setEnabled(ready)
+        self._harvest_ready = ready
+
+    def _fill_production(self, village: dict) -> None:
+        clear_layout(self.prod_grid)
+        rates = game_state.production_rates(village)
+        for i, res in enumerate(economy.RESOURCES):
+            if res not in rates:
+                continue
+            per_hour = rates[res] * 60
+            self.prod_grid.addWidget(icon_label(RESOURCE_ICONS[res], "text_dim", 15), i, 0)
+            self.prod_grid.addWidget(label(res.title()), i, 1)
+            text = f"{per_hour:,.0f}" if per_hour >= 10 else f"{per_hour:.1f}"
+            value = label(text)
+            value.setFont(fonts.sans(13, 600, tabular=True))
+            self.prod_grid.addWidget(value, i, 2, Qt.AlignmentFlag.AlignRight)
+        xp_hour = 60 * economy.XP_PER_POINT * (1 + game_state.get_bonuses(village)["xp_bonus_pct"] / 100)
+        row = len(economy.RESOURCES)
+        self.prod_grid.addWidget(icon_label("sparkles", "text_dim", 15), row, 0)
+        self.prod_grid.addWidget(label("XP"), row, 1)
+        value = label(f"{xp_hour:.0f}")
+        value.setFont(fonts.sans(13, 600, tabular=True))
+        self.prod_grid.addWidget(value, row, 2, Qt.AlignmentFlag.AlignRight)
+        self.prod_grid.setColumnStretch(1, 1)
+
+    def _collect(self) -> None:
+        applied = game_state.collect()
+        gained = {k: v for k, v in applied.items() if k in economy.RESOURCES or k in ("xp", "credits")}
+        motion.burst(self.collect_btn, radius=40, ticks=16)
+        if applied.get("level_up"):
+            msg = f"Level {applied['level_up']} reached! "
+        else:
+            msg = ""
+        self.ctx.toast(msg + ("Collected " + fmt.reward(gained, ", ") if gained else "Nothing to collect yet"))
+        bus.rewards_changed.emit()
+        if not self.isVisible():
+            self.refresh()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -272,6 +387,9 @@ class VillageView(Page):
         card.body.addWidget(LevelPips(level, spec["max_level"], self._levels.get(name)))
 
         card.body.addWidget(label(spec["desc"], "dim", wrap=True))
+        effect = _effect(name, level, maxed, village)
+        if effect:
+            card.body.addWidget(label(effect, "caption", wrap=True))
 
         if locked:
             status = f"Unlocks at player level {spec['unlock_level']}"
@@ -318,3 +436,35 @@ class VillageView(Page):
 
 def _count(n: float) -> str:
     return str(int(round(n)))
+
+
+def _effect(name: str, level: int, maxed: bool, village: dict) -> str:
+    """What the building does now, and at the next level."""
+
+    def at(lvl: int) -> dict:
+        trial = {**village, "buildings": {**village.get("buildings", {}), name: {"level": lvl}}}
+        if name == "house":
+            trial["villagers"] = village.get("villagers", 0) + (lvl - level)
+        return trial
+
+    def show(lvl: int) -> str:
+        v = at(lvl)
+        for res, (building, _rate, _free) in economy.PRODUCTION.items():
+            if building == name:
+                per_hour = game_state.production_rates(v).get(res, 0) * 60
+                return f"{per_hour:,.0f} {res}/h" if per_hour >= 10 else f"{per_hour:.1f} {res}/h"
+        bonuses = game_state.get_bonuses(v)
+        return {
+            "storage": f"holds {fmt.count(game_state.resource_cap(v))}",
+            "house": f"+{bonuses['production_pct']}% production",
+            "workshop": f"+{bonuses['xp_bonus_pct']}% XP",
+            "tavern": f"{int(bonuses['grace_sec'] // 60)} min grace",
+            "monument": f"+{economy.MONUMENT_PCT}% production and a crown",
+        }.get(name, "")
+
+    now = show(level)
+    if name == "monument":
+        return "Standing" if level else f"Adds {now}"
+    if maxed or not now:
+        return f"Now {now}" if now else ""
+    return f"Now {now}, next {show(level + 1)}"

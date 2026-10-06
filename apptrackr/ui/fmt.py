@@ -83,11 +83,19 @@ def time_of_day(ts: float) -> str:
     return dt.strftime("%H:%M")
 
 
+def amount(n: int, key: str) -> str:
+    """'1 blueprint', '25 wood', '3 credits'."""
+    name = RESOURCE_LABELS.get(key, key)
+    if n == 1 and name.endswith("s"):
+        name = name[:-1]
+    return f"{n:,} {name}"
+
+
 def reward(reward: dict, sep: str = "  ") -> str:
     parts = []
     for key in _REWARD_ORDER:
         if reward.get(key):
-            parts.append(f"+{reward[key]} {RESOURCE_LABELS[key]}")
+            parts.append(f"+{amount(reward[key], key)}")
     if reward.get("level_up"):
         parts.append(f"Level {reward['level_up']}")
     return sep.join(parts)

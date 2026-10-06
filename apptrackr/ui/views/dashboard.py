@@ -9,7 +9,7 @@ from PySide6.QtWidgets import QHBoxLayout, QMenu, QVBoxLayout, QWidget
 
 from ...core import tracker as trk
 from ...data import db, queries
-from ...game import economy
+from ...game import focus
 from ...rewards import engine as rewards
 from .. import fmt, fonts, icons, motion, theme
 from ..signals import bus
@@ -299,18 +299,17 @@ class DashboardView(Page):
 
         profile = rewards.get_profile()
         streak = profile["streak"]
-        fav_today = rewards.favorites_ms(today)
-        current = queries.get_app(snap.app_id) if snap.app_id else None
-        if current and current.get("is_favorite"):
-            fav_today += live
-        if not db.fetchone("SELECT 1 FROM apps WHERE is_favorite = 1 AND is_hidden = 0"):
-            sub = "Star an app to start a streak"
-        elif profile.get("last_streak_day") == today or fav_today >= economy.STREAK_GOAL_MS:
-            sub = "Today's goal is done"
+        focus_ids = focus.focus_app_ids()
+        focus_today = rewards.focus_ms(today) + (live if snap.app_id in focus_ids else 0)
+        goal = rewards.goal_ms()
+        if not focus_ids:
+            sub = "Add a focus app to start a streak"
+        elif profile.get("last_streak_day") == today or focus_today >= goal:
+            sub = "Today's focus goal is done"
         else:
-            left = economy.STREAK_GOAL_MS - fav_today
-            sub = f"{fmt.duration(left, short=True)} in favorites to go today"
-        self.t_streak.set_number(streak, _days, sub, tooltip="A streak day needs 30 minutes in your favorite apps.")
+            sub = f"{fmt.duration(goal - focus_today, short=True)} of focus to go today"
+        tip = f"A streak day needs {fmt.duration(goal, short=True)} in your focus apps."
+        self.t_streak.set_number(streak, _days, sub, tooltip=tip)
 
     def _refresh_charts(self, snap: trk.Snapshot) -> None:
         today = date.today()

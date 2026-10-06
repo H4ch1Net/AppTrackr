@@ -31,6 +31,7 @@ from .. import APP_NAME, __version__, paths
 from ..core import tracker as trk
 from ..core.limits import LimitMonitor
 from ..data import db, queries
+from ..game import focus
 from ..rewards import engine as rewards
 from ..updater import check as updater
 from . import fmt, fonts, icons, motion, theme
@@ -44,7 +45,7 @@ NAV = (
     ("dashboard", "Dashboard", "layout-dashboard"),
     ("calendar", "Calendar", "calendar-days"),
     ("apps", "Apps", "layout-grid"),
-    ("rewards", "Rewards", "gift"),
+    ("rewards", "Focus", "zap"),
     ("village", "Village", "castle"),
 )
 
@@ -352,7 +353,7 @@ class MainWindow(QMainWindow):
         self._update_badges()
 
     def _update_badges(self) -> None:
-        self._badges["rewards"].set_count(rewards.unclaimed_count() if rewards.enabled() else 0)
+        self._badges["rewards"].set_count(rewards.attention_count())
         self._place_nav_extras("rewards", self._nav_buttons["rewards"])
 
     # ------------------------------------------------------------------
@@ -459,19 +460,17 @@ class MainWindow(QMainWindow):
     def _slow_tick(self) -> None:
         snap = self._tracker.snapshot()
         try:
-            if rewards.enabled() and rewards.evaluate_recent():
-                bus.rewards_changed.emit()
-            fav_live = 0
-            if snap.app_id:
-                app = queries.get_app(snap.app_id)
-                fav_live = snap.uncommitted_ms if app and app.get("is_favorite") else 0
-            streak = rewards.update_streak(extra_ms=fav_live)
+            focus_live = snap.uncommitted_ms if snap.app_id in focus.focus_app_ids() else 0
+            streak = rewards.update_streak(extra_ms=focus_live)
             if streak:
-                msg = f"Streak extended to {streak['streak']} days"
-                if streak.get("reward"):
-                    msg += f" ({fmt.reward(streak['reward'], ', ')})"
-                self.notify("Streak", msg, kind="streaks")
+                days = streak["streak"]
+                msg = f"Daily focus goal reached. Streak: {days} day{'s' if days != 1 else ''}."
+                if rewards.enabled():
+                    msg += " Your chest is ready."
+                self.notify("Focus goal", msg, kind="streaks")
                 bus.rewards_changed.emit()
+            else:
+                self._update_badges()
             for app in self._limits.check(snap.app_id, snap.uncommitted_ms):
                 self.notify(
                     "Daily limit reached",

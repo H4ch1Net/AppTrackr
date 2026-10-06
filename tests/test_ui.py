@@ -96,13 +96,34 @@ def test_exclude_with_undo(window, qapp):
     assert queries.get_app(app_id)["is_hidden"] == 0
 
 
-def test_claim_from_rewards_page(window, qapp):
-    view = window._views["rewards"]
-    window.show_page("rewards")
-    view._claim_all()
+def test_focus_page_chest_and_village_harvest(window, qapp):
+    from datetime import date
+
+    from apptrackr.game import state as game_state
     from apptrackr.rewards import engine
 
+    view = window._views["rewards"]
+    window.show_page("rewards")
+    assert view.flow_card.isVisible() and not view.chest_btn.isVisible()
+    game_state.unlock_chest(date.today().isoformat())
+    view.refresh()
+    assert view.chest_btn.isVisible()
+    credits = engine.get_profile()["credits"]
+    view._open_chest()
+    assert engine.get_profile()["credits"] > credits
+    assert game_state.ready_chests() == []
+    view._claim_all()
     assert engine.unclaimed_count() == 0
+
+    village = window._views["village"]
+    window.show_page("village")
+    before = game_state.get_village()["inventory"]
+    crop = game_state.harvest()
+    assert crop["points"] > 0  # the demo village has focus time waiting
+    village._collect()
+    after = game_state.get_village()["inventory"]
+    assert all(after[r] == before[r] + n for r, n in crop["resources"].items())
+    assert game_state.harvest()["points"] < 1
 
 
 def test_unsupported_platform_shows_state(qapp):
