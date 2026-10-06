@@ -284,6 +284,17 @@ class SettingsView(Page):
             )
         )
         card.body.addWidget(divider())
+        self.overlay = Toggle()
+        self.overlay.toggled.connect(self._set_overlay)
+        card.body.addWidget(
+            SettingRow(
+                "Floating timer",
+                "A small clock over other apps showing how long you have been in them. "
+                "Drag it anywhere; double-click it to open AppTrackr.",
+                self.overlay,
+            )
+        )
+        card.body.addWidget(divider())
         self.notifications = Toggle()
         self.notifications.toggled.connect(self._set_notifications)
         card.body.addWidget(
@@ -492,6 +503,7 @@ class SettingsView(Page):
     def refresh(self) -> None:
         self.autostart.set_silently(autostart.is_enabled())
         self.tray.set_silently(db.get_bool("minimize_to_tray", True))
+        self.overlay.set_silently(db.get_bool("overlay_enabled", True))
         self.notifications.set_silently(db.get_bool("notifications_enabled", True))
         self.rewards.set_silently(db.get_bool("rewards_enabled", True))
         goal = db.get_int("focus_goal_min", economy.DEFAULT_GOAL_MIN)
@@ -560,6 +572,10 @@ class SettingsView(Page):
         db.set_setting("rewards_enabled", on)
         self.ctx.window.apply_rewards_visibility()
         self.ctx.toast("Focus game turned on" if on else "Focus game turned off")
+
+    def _set_overlay(self, on: bool) -> None:
+        self.ctx.window.set_overlay_enabled(on)
+        self.ctx.toast("Floating timer on" if on else "Floating timer off")
 
     def _set_goal(self, minutes: int) -> None:
         db.set_setting("focus_goal_min", minutes)

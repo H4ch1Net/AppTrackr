@@ -236,3 +236,41 @@ def test_other_terms_card(window, qapp):
     card.period._group.button(2).click()
     qapp.processEvents()
     assert card.current_period == "all" and db.get_setting("perspective_period") == "all"
+
+
+def test_floating_timer_follows_the_app_in_front(window, qapp, monkeypatch):
+    from apptrackr.game import focus
+    from apptrackr.ui import motion
+
+    motion.force(False)  # fades finish at once
+    overlay = window._overlay
+    monkeypatch.setattr(window, "_app_in_front", lambda: False)
+    window._update_overlay()
+    qapp.processEvents()
+    assert overlay.isVisible()
+    snap = window._tracker.snapshot()
+    assert overlay._name == queries.get_app(snap.app_id)["name"]
+    assert overlay._focus == (snap.app_id in focus.focus_app_ids())
+    assert not overlay.grab().isNull()
+
+    monkeypatch.setattr(window, "_app_in_front", lambda: True)  # AppTrackr itself is in front
+    window._update_overlay()
+    qapp.processEvents()
+    assert not overlay.isVisible()
+
+    monkeypatch.setattr(window, "_app_in_front", lambda: False)
+    monkeypatch.setattr(window._tracker, "foreground_fullscreen", lambda: True)
+    window._update_overlay()
+    assert not overlay.isVisible()
+    monkeypatch.setattr(window._tracker, "foreground_fullscreen", lambda: False)
+
+    window.set_overlay_enabled(False)
+    assert not overlay.isVisible() and not db.get_bool("overlay_enabled", True)
+    window.set_overlay_enabled(True)
+    assert overlay.isVisible()
+
+    overlay.move(120, 140)
+    overlay.save_position()
+    assert db.get_setting("overlay_pos") == "120,140"
+    overlay.hide_requested.emit()
+    assert not overlay.isVisible() and not window._overlay_enabled

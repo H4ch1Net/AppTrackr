@@ -32,9 +32,11 @@ from ..core import tracker as trk
 from ..core.limits import LimitMonitor
 from ..data import db, queries
 from ..game import focus
+from ..game import state as game_state
 from ..rewards import engine as rewards
 from ..updater import check as updater
 from . import fmt, fonts, icons, motion, theme
+from .overlay import FloatingTimer
 from .signals import bus, run_async
 from .widgets.components import Badge, IconBinding, StatusModule, Toast, label
 
@@ -97,6 +99,11 @@ class MainWindow(QMainWindow):
         self._build()
         self._setup_tray()
         self._setup_shortcuts()
+        self._overlay = FloatingTimer()
+        self._overlay.open_requested.connect(self.bring_to_front)
+        self._overlay.hide_requested.connect(lambda: self.set_overlay_enabled(False))
+        self._overlay_enabled = db.get_bool("overlay_enabled", True)
+        self.destroyed.connect(self._overlay.deleteLater)  # a separate top-level window, not a child
         self.toast = Toast(self.centralWidget())
         bus.toast.connect(lambda text, tone: self.toast.show_message(text, tone))
         bus.rewards_changed.connect(self._update_badges)
@@ -452,10 +459,41 @@ class MainWindow(QMainWindow):
 
     def _tick(self) -> None:
         self._refresh_status()
+        self._update_overlay()
         if self.isVisible() and not self.isMinimized():
             view = self._views[self._current]
             if hasattr(view, "tick"):
                 view.tick()
+
+    # ------------------------------------------------------------------
+    # Floating timer
+    # ------------------------------------------------------------------
+
+    def set_overlay_enabled(self, on: bool) -> None:
+        db.set_setting("overlay_enabled", on)
+        self._overlay_enabled = on
+        self._update_overlay()
+
+    def _app_in_front(self) -> bool:
+        return QApplication.activeWindow() is not None
+
+    def _update_overlay(self) -> None:
+        """Show the floating timer while another app is being tracked, hide it otherwise."""
+        if self._quitting:
+            return
+        snap = self._tracker.snapshot()
+        tracking = snap.status == trk.STATUS_TRACKING and snap.app_id is not None
+        if not (self._overlay_enabled and tracking) or self._app_in_front() or self._tracker.foreground_fullscreen():
+            self._overlay.disappear()
+            return
+        app = queries.get_app(snap.app_id)
+        flow = None
+        if rewards.enabled() and snap.app_id in focus.focus_app_ids():
+            tavern = game_state.building_level(game_state.get_village(), "tavern")
+            flow = focus.current(live_app_id=snap.app_id, live_since=snap.session_start, tavern_level=tavern)
+        today = queries.app_usage_on(queries.today_str(), snap.app_id) + snap.uncommitted_ms
+        self._overlay.set_state(app["name"] if app else snap.exe_name, snap.session_ms, today, flow)
+        self._overlay.appear()
 
     def _slow_tick(self) -> None:
         snap = self._tracker.snapshot()
@@ -540,6 +578,7 @@ class MainWindow(QMainWindow):
 
     def quit(self) -> None:
         self._quitting = True
+        self._overlay.hide()
         if self._tray:
             self._tray.hide()
         QApplication.quit()

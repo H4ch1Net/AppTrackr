@@ -85,12 +85,23 @@ class _LASTINPUTINFO(ctypes.Structure):
     _fields_ = [("cbSize", ctypes.c_uint), ("dwTime", ctypes.c_uint)]
 
 
+class _RECT(ctypes.Structure):
+    _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long), ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+
+
+class _MONITORINFO(ctypes.Structure):
+    _fields_ = [("cbSize", ctypes.c_ulong), ("rcMonitor", _RECT), ("rcWork", _RECT), ("dwFlags", ctypes.c_ulong)]
+
+
 class WindowsPlatform:
     """Win32 implementation using user32/kernel32 through ctypes."""
 
     supported = True
     _DESKTOP_READOBJECTS = 0x0001
     _UWP_HOST = "applicationframehost.exe"
+    _GWL_STYLE = -16
+    _WS_CAPTION = 0x00C00000
+    _MONITOR_DEFAULTTONEAREST = 2
 
     def __init__(self) -> None:
         from ctypes import wintypes
@@ -112,6 +123,18 @@ class WindowsPlatform:
         self._enum_proc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)  # type: ignore[attr-defined]
         u.EnumChildWindows.argtypes = [wintypes.HWND, self._enum_proc, wintypes.LPARAM]
         u.EnumChildWindows.restype = wintypes.BOOL
+        u.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(_RECT)]
+        u.GetWindowRect.restype = wintypes.BOOL
+        u.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
+        u.GetWindowLongW.restype = ctypes.c_long
+        u.MonitorFromWindow.argtypes = [wintypes.HWND, wintypes.DWORD]
+        u.MonitorFromWindow.restype = wintypes.HANDLE
+        u.GetMonitorInfoW.argtypes = [wintypes.HANDLE, ctypes.POINTER(_MONITORINFO)]
+        u.GetMonitorInfoW.restype = wintypes.BOOL
+        u.GetShellWindow.argtypes = []
+        u.GetShellWindow.restype = wintypes.HWND
+        u.GetDesktopWindow.argtypes = []
+        u.GetDesktopWindow.restype = wintypes.HWND
         k.GetTickCount.argtypes = []
         k.GetTickCount.restype = wintypes.DWORD
 
@@ -166,6 +189,25 @@ class WindowsPlatform:
         if name.lower() != self._UWP_HOST:
             self._last_key, self._last_app = key, app
         return app
+
+    def foreground_fullscreen(self) -> bool:
+        """True while the foreground window covers its whole monitor (a game, a video, a slideshow)."""
+        u = self._user32
+        hwnd = u.GetForegroundWindow()
+        if not hwnd or hwnd in (u.GetShellWindow(), u.GetDesktopWindow()):
+            return False
+        rect = _RECT()
+        info = _MONITORINFO()
+        info.cbSize = ctypes.sizeof(_MONITORINFO)
+        monitor = u.MonitorFromWindow(hwnd, self._MONITOR_DEFAULTTONEAREST)
+        if not u.GetWindowRect(hwnd, ctypes.byref(rect)) or not u.GetMonitorInfoW(monitor, ctypes.byref(info)):
+            return False
+        m = info.rcMonitor
+        exact = (rect.left, rect.top, rect.right, rect.bottom) == (m.left, m.top, m.right, m.bottom)
+        covers = rect.left <= m.left and rect.top <= m.top and rect.right >= m.right and rect.bottom >= m.bottom
+        # A maximized window overhangs the monitor by its borders but keeps its title bar.
+        captionless = (u.GetWindowLongW(hwnd, self._GWL_STYLE) & self._WS_CAPTION) != self._WS_CAPTION
+        return exact or (covers and captionless)
 
     def idle_seconds(self) -> float:
         info = _LASTINPUTINFO()
