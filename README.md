@@ -34,7 +34,7 @@ optional idle game that rewards staying focused in the apps you choose.
 | --- | --- |
 | Tracking | Foreground-only time, idle cut-off at your last input, lock-screen detection, midnight-accurate daily totals, UWP apps resolved to the real app, elevated apps tracked by name |
 | Dashboard | Live session dial, today vs. this time yesterday, week total, today by hour, last 14 days, top apps with share and category breakdown |
-| In other terms | Today, this week or all time retold as Everest summit days, Apollo 11 trips, ISS laps, marathons, novels and more, each with the basis for its number |
+| In other terms | Today, this week or all time as six plain counts drawn from 56 yardsticks (films, football matches, loaves of bread, ISS laps, novels and more), each with the basis for its number |
 | Calendar | Month heatmap with keyboard navigation, month totals and busiest day, per-day hourly chart and app list |
 | Apps | Search, period filter (today to all time), category and favorite filters, sort by time, launches or clicks |
 | App detail | Today / 7 / 30 day totals, 30-day chart, recent sessions, first and last seen, longest session, rename, category |
@@ -62,7 +62,7 @@ optional idle game that rewards staying focused in the apps you choose.
     <td><img src="docs/screenshots/village.png" alt="Village"><br><sub>Village: harvest, production, buildings and market</sub></td>
   </tr>
   <tr>
-    <td><img src="docs/screenshots/dashboard-perspective.png" alt="In other terms"><br><sub>In other terms: the week as Voyager kilometres, marathons and Everest</sub></td>
+    <td><img src="docs/screenshots/dashboard-perspective.png" alt="In other terms"><br><sub>In other terms: the week as lectures, football matches and loaves of bread</sub></td>
     <td><img src="docs/screenshots/settings-appearance.png" alt="Appearance settings"><br><sub>Palette gallery, accents and animation switch</sub></td>
   </tr>
   <tr>
@@ -148,8 +148,8 @@ use **Quit** from the tray menu (or <kbd>Ctrl</kbd>+<kbd>Q</kbd>) to stop it.
 - **Floating timer.** While you work in another app, a small clock in the corner shows how long you have
   been in it. Drag it anywhere, double-click it to open AppTrackr, right-click to hide it.
 - **In other terms.** The dashboard card retells today, this week or all time against known yardsticks.
-  *Shuffle* shows others. Each comparison names its basis, for example "South Col to the summit and back
-  down: about 14 h".
+  *Shuffle* shows others. Each comparison names its basis, for example "football matches: two 45-minute
+  halves".
 
 ### Keyboard shortcuts
 

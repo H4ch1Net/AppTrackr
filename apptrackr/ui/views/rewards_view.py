@@ -349,6 +349,9 @@ class RewardsView(Page):
             if done < goal
             else f"Goal reached: {fmt.duration(done, short=True)} of focus"
         )
+        if done >= goal and game_state.chest_state(today) == "locked" and rewards.update_streak(extra_ms=live):
+            profile = rewards.get_profile()  # the goal was just reached: count the day and unlock the chest
+            self.ctx.toast("Daily focus goal reached. Your chest is ready.")
         streak = profile["streak"]
         self.streak_text.setText(f"Streak {streak} day{'s' if streak != 1 else ''}" if streak else "No streak yet")
         animate_progress(self.goal_bar, self.goal_bar.value(), int(1000 * min(1.0, done / goal)))
