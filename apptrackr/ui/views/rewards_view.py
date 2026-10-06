@@ -234,6 +234,7 @@ class RewardsView(Page):
         self._shown: dict = {}
         self._added_app: int | None = None
         self._ticks = 0
+        self._last_mult: float | None = None
         bus.rewards_changed.connect(lambda: self.isVisible() and self.refresh())
         bus.data_changed.connect(lambda: self.isVisible() and self.refresh())
 
@@ -308,6 +309,10 @@ class RewardsView(Page):
             tavern_level=game_state.building_level(village, "tavern"),
         )
         self.multiplier.roll_to(f"×{flow.multiplier:g}")
+        if flow.active and self._last_mult is not None and flow.multiplier > self._last_mult:
+            motion.flash(self.multiplier, theme.current().accent, radius=6)
+            motion.burst(self.multiplier, theme.current().accent, radius=44, ticks=16)  # a new flow tier
+        self._last_mult = flow.multiplier
         self.tier.setText(flow.tier if flow.run_ms else "Not in a run")
         self.facts["run"].roll_to(fmt.clock(flow.run_ms) if flow.run_ms else "–")
         if flow.next_tier and flow.run_ms:

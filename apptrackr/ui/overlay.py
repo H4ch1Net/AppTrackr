@@ -49,6 +49,8 @@ class FloatingTimer(QWidget):
         self._drag: QPoint | None = None
         self._leaving = False
         self._placed = False
+        self._multiplier: float | None = None
+        self._glow = 0.0  # accent ring after reaching a new flow tier
 
     # -- state ---------------------------------------------------------------
 
@@ -58,11 +60,19 @@ class FloatingTimer(QWidget):
         self._session_ms = session_ms
         self._focus = flow is not None and flow.active
         if self._focus:
+            if self._multiplier is not None and flow.multiplier > self._multiplier:
+                motion.tween(self, 1.0, 0.0, 1600, self._set_glow, motion.DECELERATE, key="glow")
+            self._multiplier = flow.multiplier
             self._detail = f"×{flow.multiplier:g}  {flow.tier.upper()}"
             self._progress = _tier_progress(flow.run_ms) if flow.next_tier else 1.0
         else:
+            self._multiplier = None
             self._detail = f"TODAY {fmt.duration(today_ms, short=True).upper()}"
             self._progress = None
+        self.update()
+
+    def _set_glow(self, value: float) -> None:
+        self._glow = value
         self.update()
 
     def appear(self) -> None:
@@ -151,6 +161,11 @@ class FloatingTimer(QWidget):
         p.fillPath(path, QColor(t.surface))
         p.setPen(QPen(QColor(t.border_strong), 1))
         p.drawPath(path)
+        if self._glow > 0:
+            ring = QColor(t.accent)
+            ring.setAlphaF(self._glow)
+            p.setPen(QPen(ring, 2))
+            p.drawPath(path)
 
         # Status dot: accent while a focus app is building flow.
         p.setPen(Qt.PenStyle.NoPen)
