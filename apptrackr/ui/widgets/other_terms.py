@@ -2,19 +2,18 @@
 
 from __future__ import annotations
 
-from datetime import date
-
 from PySide6.QtCore import QSize, Qt, QTimer
 from PySide6.QtGui import QPainter
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QSizePolicy, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFrame, QGridLayout, QHBoxLayout, QSizePolicy, QVBoxLayout, QWidget
 
 from ... import perspective
 from ...data import db
 from .. import fmt, fonts, icons, motion, theme
-from .components import Card, SegmentedControl, button, label, vdivider
+from .components import Card, SegmentedControl, button, divider, label, vdivider
 from .rolling import RollingLabel
 
 PERIODS = (("today", "Today"), ("week", "This week"), ("all", "All time"))
+ROWS, COLUMNS = 2, 3
 
 
 class _Glyph(QWidget):
@@ -87,7 +86,7 @@ class FactTile(QFrame):
 
 
 class OtherTermsCard(Card):
-    """Three comparisons for the chosen period, with a shuffle."""
+    """Six comparisons for the chosen period, two rows of three, with a shuffle."""
 
     def __init__(self, index: int | None = None, parent=None):
         super().__init__("In other terms", "–", parent=parent, index=index)
@@ -97,23 +96,28 @@ class OtherTermsCard(Card):
         self.shuffle = button("Shuffle", kind="ghost", icon="refresh-cw", on_click=self._shuffle)
         self.shuffle.setToolTip("Show other comparisons")
         self.header_actions.addWidget(self.shuffle)
-        row = QFrame()
-        row.setProperty("cell", True)
-        lay = QHBoxLayout(row)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(0)
+        panel = QFrame()
+        panel.setProperty("cell", True)
+        grid = QGridLayout(panel)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setSpacing(0)
         self.tiles: list[FactTile] = []
-        for i in range(3):
-            if i:
-                lay.addWidget(vdivider())
+        for i in range(ROWS * COLUMNS):  # tiles on even rows and columns, hairlines between
+            r, c = divmod(i, COLUMNS)
+            if c:
+                grid.addWidget(vdivider(), r * 2, c * 2 - 1)
+            if r:
+                grid.addWidget(divider(), r * 2 - 1, c * 2, 1, 2 if c < COLUMNS - 1 else 1)
             tile = FactTile()
             self.tiles.append(tile)
-            lay.addWidget(tile, 1)
-        self.body.addWidget(row)
+            grid.addWidget(tile, r * 2, c * 2)
+        for c in range(COLUMNS):
+            grid.setColumnStretch(c * 2, 1)
+        self.body.addWidget(panel)
         stored = db.get_setting("perspective_period", "week")
         self._period = stored if stored in dict(PERIODS) else "week"
         self.period.set_current([key for key, _ in PERIODS].index(self._period))
-        self._offset = date.today().toordinal()  # a different set each day
+        self._offset = 0  # the best set first; Shuffle steps through the rest
         self._totals: dict[str, float] = {}
         self._shown_offset: int | None = None
         self._shown_period: str | None = None
@@ -153,7 +157,7 @@ class OtherTermsCard(Card):
         for i, tile in enumerate(self.tiles):
             fact = facts[i] if i < len(facts) else None
             delay = (
-                i * 70 if animate and (self._shown_offset != self._offset or self._shown_period != self._period) else 0
+                i * 50 if animate and (self._shown_offset != self._offset or self._shown_period != self._period) else 0
             )
             if delay:
                 QTimer.singleShot(int(delay * motion.time_scale), tile, lambda t=tile, f=fact: t.show_fact(f, True))

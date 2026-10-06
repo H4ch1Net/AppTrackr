@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 from ... import APP_NAME, REPO_URL, __version__
 from ...core import autostart
 from ...data import db, export, queries
+from ...game import economy
 from ...updater import apply as updater_apply
 from ...updater import check as updater
 from .. import fmt, fonts, motion, theme
@@ -283,6 +284,17 @@ class SettingsView(Page):
             )
         )
         card.body.addWidget(divider())
+        self.overlay = Toggle()
+        self.overlay.toggled.connect(self._set_overlay)
+        card.body.addWidget(
+            SettingRow(
+                "Floating timer",
+                "A small clock over other apps showing how long you have been in them. "
+                "Drag it anywhere; double-click it to open AppTrackr.",
+                self.overlay,
+            )
+        )
+        card.body.addWidget(divider())
         self.notifications = Toggle()
         self.notifications.toggled.connect(self._set_notifications)
         card.body.addWidget(
@@ -306,9 +318,20 @@ class SettingsView(Page):
         self.rewards.toggled.connect(self._set_rewards)
         card.body.addWidget(
             SettingRow(
-                "Rewards and village",
-                "XP, levels and the village game. Turning this off hides both pages; nothing is deleted.",
+                "Focus game",
+                "Flow, levels and the village. Turning this off hides both pages; nothing is deleted.",
                 self.rewards,
+            )
+        )
+        card.body.addWidget(divider())
+        self.goal = TickSlider([(fmt.duration(m * 60_000, short=True), m) for m in economy.GOAL_CHOICES])
+        self.goal.setAccessibleName("Daily focus goal")
+        self.goal.committed.connect(self._set_goal)
+        card.body.addWidget(
+            SettingRow(
+                "Daily focus goal",
+                "Time in your focus apps that counts as a streak day and opens the daily chest.",
+                self.goal,
             )
         )
         self.add(card)
@@ -480,8 +503,14 @@ class SettingsView(Page):
     def refresh(self) -> None:
         self.autostart.set_silently(autostart.is_enabled())
         self.tray.set_silently(db.get_bool("minimize_to_tray", True))
+        self.overlay.set_silently(db.get_bool("overlay_enabled", True))
         self.notifications.set_silently(db.get_bool("notifications_enabled", True))
         self.rewards.set_silently(db.get_bool("rewards_enabled", True))
+        goal = db.get_int("focus_goal_min", economy.DEFAULT_GOAL_MIN)
+        if self.goal.index_of(goal) < 0:  # a value set outside the slider keeps its own stop
+            stops = sorted({*economy.GOAL_CHOICES, goal})
+            self.goal.set_stops([(fmt.duration(m * 60_000, short=True), m) for m in stops])
+        self.goal.set_stop_value(goal)
         self.clicks.set_silently(db.get_bool("track_clicks"))
         self.auto_update.set_silently(db.get_bool("auto_update_check", True))
         self.feed.setText(db.get_setting("update_url", ""))
@@ -542,7 +571,16 @@ class SettingsView(Page):
     def _set_rewards(self, on: bool) -> None:
         db.set_setting("rewards_enabled", on)
         self.ctx.window.apply_rewards_visibility()
-        self.ctx.toast("Rewards turned on" if on else "Rewards turned off")
+        self.ctx.toast("Focus game turned on" if on else "Focus game turned off")
+
+    def _set_overlay(self, on: bool) -> None:
+        self.ctx.window.set_overlay_enabled(on)
+        self.ctx.toast("Floating timer on" if on else "Floating timer off")
+
+    def _set_goal(self, minutes: int) -> None:
+        db.set_setting("focus_goal_min", minutes)
+        bus.rewards_changed.emit()
+        self.ctx.toast(f"Daily focus goal set to {fmt.duration(minutes * 60_000)}")
 
     def _set_idle(self, sec: int) -> None:
         db.set_setting("idle_threshold_sec", sec)

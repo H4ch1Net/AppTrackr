@@ -139,6 +139,14 @@ class Tracker:
         """Lock-free read for hot paths such as the mouse hook."""
         return self._app_id
 
+    def foreground_fullscreen(self) -> bool:
+        """True while a full-screen window is in front (Windows only)."""
+        check = getattr(self._platform, "foreground_fullscreen", None)
+        try:
+            return bool(check()) if check else False
+        except OSError:
+            return False
+
     def snapshot(self) -> Snapshot:
         with self._lock:
             now = self._clock()

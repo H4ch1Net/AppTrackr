@@ -152,8 +152,10 @@ def main() -> int:
     detail.limit.setValue(detail.limit.index_of(60))  # the fader glides to the new stop
     wait(1100)
     window.show_page("rewards")
-    wait(700)
-    window._views["rewards"]._claim_all()
+    wait(1400)
+    window.show_page("village")
+    wait(900)
+    window._views["village"]._collect()
     wait(1600)
     settings = window._views["settings"]
     window.show_page("settings")

@@ -1,4 +1,4 @@
-"""App detail: totals, 30-day history, limit, rewards and recent sessions for one app."""
+"""App detail: totals, 30-day history, limit, focus and recent sessions for one app."""
 
 from __future__ import annotations
 
@@ -131,7 +131,7 @@ class AppDetailView(Page):
         self.rewards_toggle = Toggle()
         self.rewards_toggle.toggled.connect(self._on_rewards)
         self.rewards_row = SettingRow(
-            "Earn rewards", "Time in this app earns XP and village resources.", self.rewards_toggle
+            "Focus app", "Time here builds flow and powers your village.", self.rewards_toggle
         )
         self.settings_card.body.addWidget(self.rewards_row)
         self.reward_hint = label("", "caption", wrap=True)
@@ -260,8 +260,8 @@ class AppDetailView(Page):
             val = label(value)
             val.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             self.facts_grid.addWidget(val, row, 1)
-        # The all-time total retold: a different yardstick for each app.
-        retold = perspective.pick(summary["total_ms"] / 60000, 1, offset=self.app_id or 0)
+        # The all-time total retold: one of the best few yardsticks, a different one from app to app.
+        retold = perspective.pick(summary["total_ms"] / 60000, 1, offset=(self.app_id or 0) % 3)
         if retold:
             fact = retold[0]
             row = len(facts)
@@ -312,15 +312,10 @@ class AppDetailView(Page):
             self.reward_hint.setText("")
             self.reward_hint.hide()
             return
-        item = next((m for m in rewards.next_milestones() if m["app_id"] == self.app_id), None)
-        if item and item["next"]:
-            nxt = item["next"]
-            self.reward_hint.setText(
-                f"Next milestone at {fmt.duration(nxt['target_ms'], short=True)} today "
-                f"({fmt.duration(item['focused_ms'], short=True)} so far): {fmt.reward(nxt['reward'], ', ')}"
-            )
-        else:
-            self.reward_hint.setText("All of today's milestones are done.")
+        used = queries.app_usage_on(queries.today_str(), self.app_id)
+        goal = fmt.duration(rewards.goal_ms(), short=True)
+        today = f"{fmt.duration(used, short=True)} here today" if used else "Nothing here yet today"
+        self.reward_hint.setText(f"{today}. Counts toward flow and your {goal} daily focus goal.")
         self.reward_hint.setVisible(rewards.enabled())
 
     # ------------------------------------------------------------------

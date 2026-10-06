@@ -96,13 +96,34 @@ def test_exclude_with_undo(window, qapp):
     assert queries.get_app(app_id)["is_hidden"] == 0
 
 
-def test_claim_from_rewards_page(window, qapp):
-    view = window._views["rewards"]
-    window.show_page("rewards")
-    view._claim_all()
+def test_focus_page_chest_and_village_harvest(window, qapp):
+    from datetime import date
+
+    from apptrackr.game import state as game_state
     from apptrackr.rewards import engine
 
+    view = window._views["rewards"]
+    window.show_page("rewards")
+    assert view.flow_card.isVisible() and not view.chest_btn.isVisible()
+    game_state.unlock_chest(date.today().isoformat())
+    view.refresh()
+    assert view.chest_btn.isVisible()
+    credits = engine.get_profile()["credits"]
+    view._open_chest()
+    assert engine.get_profile()["credits"] > credits
+    assert game_state.ready_chests() == []
+    view._claim_all()
     assert engine.unclaimed_count() == 0
+
+    village = window._views["village"]
+    window.show_page("village")
+    before = game_state.get_village()["inventory"]
+    crop = game_state.harvest()
+    assert crop["points"] > 0  # the demo village has focus time waiting
+    village._collect()
+    after = game_state.get_village()["inventory"]
+    assert all(after[r] == before[r] + n for r, n in crop["resources"].items())
+    assert game_state.harvest()["points"] < 1
 
 
 def test_unsupported_platform_shows_state(qapp):
@@ -215,3 +236,41 @@ def test_other_terms_card(window, qapp):
     card.period._group.button(2).click()
     qapp.processEvents()
     assert card.current_period == "all" and db.get_setting("perspective_period") == "all"
+
+
+def test_floating_timer_follows_the_app_in_front(window, qapp, monkeypatch):
+    from apptrackr.game import focus
+    from apptrackr.ui import motion
+
+    motion.force(False)  # fades finish at once
+    overlay = window._overlay
+    monkeypatch.setattr(window, "_app_in_front", lambda: False)
+    window._update_overlay()
+    qapp.processEvents()
+    assert overlay.isVisible()
+    snap = window._tracker.snapshot()
+    assert overlay._name == queries.get_app(snap.app_id)["name"]
+    assert overlay._focus == (snap.app_id in focus.focus_app_ids())
+    assert not overlay.grab().isNull()
+
+    monkeypatch.setattr(window, "_app_in_front", lambda: True)  # AppTrackr itself is in front
+    window._update_overlay()
+    qapp.processEvents()
+    assert not overlay.isVisible()
+
+    monkeypatch.setattr(window, "_app_in_front", lambda: False)
+    monkeypatch.setattr(window._tracker, "foreground_fullscreen", lambda: True)
+    window._update_overlay()
+    assert not overlay.isVisible()
+    monkeypatch.setattr(window._tracker, "foreground_fullscreen", lambda: False)
+
+    window.set_overlay_enabled(False)
+    assert not overlay.isVisible() and not db.get_bool("overlay_enabled", True)
+    window.set_overlay_enabled(True)
+    assert overlay.isVisible()
+
+    overlay.move(120, 140)
+    overlay.save_position()
+    assert db.get_setting("overlay_pos") == "120,140"
+    overlay.hide_requested.emit()
+    assert not overlay.isVisible() and not window._overlay_enabled
